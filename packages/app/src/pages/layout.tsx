@@ -135,6 +135,7 @@ export default function Layout(props: ParentProps) {
   createEffect(() => setV2Toast(newDesign()))
   const initialDirectory = decode64(params.dir)
   const location = useLocation()
+  const isRequirementsRoute = createMemo(() => location.pathname === "/requirements")
   const route = createMemo(() => {
     const slug = params.dir
     if (!slug) return { slug, dir: "" }
@@ -2346,15 +2347,23 @@ export default function Layout(props: ParentProps) {
       onOpenSettings={openSettings}
       helpLabel={() => language.t("sidebar.help")}
       onOpenHelp={() => platform.openLink("https://opencode.ai/desktop-feedback")}
-      renderPanel={() =>
-        mobile ? <SidebarPanel project={currentProject} mobile /> : <SidebarPanel project={currentProject} merged />
-      }
+      requirementsLabel={() => language.t("sidebar.requirements")}
+      onOpenRequirements={() => navigate("/requirements")}
+      renderPanel={() => {
+        const project = () =>
+          currentProject() ?? (isRequirementsRoute() ? layout.projects.list()[0] : undefined)
+        return mobile ? (
+          <SidebarPanel project={project} mobile />
+        ) : (
+          <SidebarPanel project={project} merged />
+        )
+      }}
     />
   )
 
   return (
     <Show
-      when={!newDesign()}
+      when={!newDesign() || isRequirementsRoute()}
       fallback={
         <div class="relative bg-v2-background-bg-deep flex-1 min-h-0 min-w-0 flex flex-col select-none [&_input]:select-text [&_textarea]:select-text [&_[contenteditable]]:select-text">
           {autoselecting() ?? ""}

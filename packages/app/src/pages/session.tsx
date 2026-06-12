@@ -70,6 +70,7 @@ import { extractPromptFromParts } from "@/utils/prompt"
 import { same } from "@/utils/same"
 import { formatServerError } from "@/utils/server-errors"
 import { useUsageExceededDialogs } from "./session/usage-exceeded-dialogs"
+import { consumeSessionDraft } from "@/features/requirements/services/sessionDraftStore"
 
 const emptyUserMessages: UserMessage[] = []
 type FollowupItem = FollowupDraft & { id: string }
@@ -213,6 +214,17 @@ export default function Page() {
       if (!text) return
       prompt.set([{ type: "text", content: text, start: 0, end: text.length }], text.length)
       setSearchParams({ ...searchParams, prompt: undefined })
+    })
+  })
+
+  // Consume requirements draft for existing sessions (Fill into Session)
+  createEffect(() => {
+    if (!prompt.ready()) return
+    if (!params.id) return
+    untrack(() => {
+      const draft = consumeSessionDraft(params.id!)
+      if (!draft) return
+      prompt.set([{ type: "text", content: draft, start: 0, end: draft.length }], draft.length)
     })
   })
 

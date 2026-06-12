@@ -30,6 +30,8 @@ export const SidebarContent = (props: {
   onOpenSettings: () => void
   helpLabel: Accessor<string>
   onOpenHelp: () => void
+  requirementsLabel: Accessor<string>
+  onOpenRequirements: () => void
   renderPanel: () => JSX.Element
 }): JSX.Element => {
   const expanded = createMemo(() => !!props.mobile || props.opened())
@@ -99,6 +101,15 @@ export const SidebarContent = (props: {
               aria-label={props.settingsLabel()}
             />
           </TooltipKeybind>
+          <Tooltip placement={placement()} value={props.requirementsLabel()}>
+            <IconButton
+              icon="bullet-list"
+              variant="ghost"
+              size="large"
+              onClick={props.onOpenRequirements}
+              aria-label={props.requirementsLabel()}
+            />
+          </Tooltip>
           <Tooltip placement={placement()} value={props.helpLabel()}>
             <IconButton
               icon="help"
