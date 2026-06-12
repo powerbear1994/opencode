@@ -1,4 +1,5 @@
-import { createSignal, Show, type Component } from "solid-js"
+import { createEffect, createSignal, Show, type Component } from "solid-js"
+import { useSearchParams } from "@solidjs/router"
 import { useLanguage } from "@/context/language"
 import { RequirementsProvider } from "./provider"
 import { RequirementList } from "./list"
@@ -9,6 +10,16 @@ import { RequirementDetail } from "./detail"
 const RequirementsContent: Component = () => {
   const language = useLanguage()
   const [selectedId, setSelectedId] = createSignal<string | null>(null)
+  const [searchParams, setSearchParams] = useSearchParams<{ selectedId?: string }>()
+
+  // Support navigating from chat session card with ?selectedId=REQ-001
+  createEffect(() => {
+    const id = searchParams.selectedId
+    if (id) {
+      setSelectedId(id)
+      setSearchParams({ selectedId: undefined })
+    }
+  })
 
   const handleSelect = (id: string) => {
     setSelectedId(id)
