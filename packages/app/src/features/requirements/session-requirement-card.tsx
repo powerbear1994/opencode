@@ -13,12 +13,12 @@ const STATUS_OPTIONS: LinkStatus[] = ["implementing", "waiting_review", "done", 
 function statusColor(status: string): string {
   const map: Record<string, string> = {
     not_started: "bg-[var(--v2-text-text-faint)]/15 text-[var(--v2-text-text-faint)]",
-    filled_to_session: "bg-[var(--v2-color-yellow-400)]/15 text-[var(--v2-color-yellow-400)]",
-    session_created: "bg-[var(--v2-color-green-400)]/15 text-[var(--v2-color-green-400)]",
-    implementing: "bg-[var(--v2-color-purple-400)]/15 text-[var(--v2-color-purple-400)]",
-    waiting_review: "bg-[var(--v2-color-yellow-400)]/15 text-[var(--v2-color-yellow-400)]",
-    done: "bg-[var(--v2-color-green-400)]/30 text-[var(--v2-color-green-400)]",
-    failed: "bg-[var(--v2-color-red-400)]/15 text-[var(--v2-color-red-400)]",
+    filled_to_session: "bg-[var(--v2-yellow-400)]/15 text-[var(--v2-yellow-600)]",
+    session_created: "bg-[var(--v2-green-400)]/15 text-[var(--v2-green-600)]",
+    implementing: "bg-[var(--v2-purple-400)]/15 text-[var(--v2-purple-600)]",
+    waiting_review: "bg-[var(--v2-yellow-400)]/15 text-[var(--v2-yellow-600)]",
+    done: "bg-[var(--v2-green-400)]/30 text-[var(--v2-green-700)]",
+    failed: "bg-[var(--v2-red-400)]/15 text-[var(--v2-red-600)]",
   }
   return map[status] ?? map.not_started
 }
@@ -69,7 +69,7 @@ export const SessionRequirementCard: Component<{
               <button
                 type="button"
                 onClick={() => setExpanded((v) => !v)}
-                class="text-[11px] text-[var(--v2-color-blue-400)] hover:underline shrink-0"
+                class="text-[11px] text-[var(--v2-blue-400)] hover:underline shrink-0"
               >
                 {expanded() ? language.t("requirements.card.collapse") : language.t("requirements.card.expand")}
               </button>
@@ -82,7 +82,7 @@ export const SessionRequirementCard: Component<{
               <For each={links()}>
                 {(link) => (
                   <div class="flex items-center gap-2">
-                    <span class="text-[11px] font-[530] text-[var(--v2-color-blue-400)] shrink-0 w-16">
+                    <span class="text-[11px] font-[530] text-[var(--v2-blue-400)] shrink-0 w-16">
                       {link.requirementId}
                     </span>
                     <span class="text-[12px] text-[var(--v2-text-text-base)] min-w-0 truncate flex-1">

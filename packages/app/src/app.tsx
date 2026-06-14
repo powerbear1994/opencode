@@ -74,6 +74,29 @@ const SessionRoute = Object.assign(
       tabs.newDraft({ server: server.key, directory: sdk.directory }, search.prompt)
     })
 
+    // Consume pending requirement link when a new session is created
+    createEffect(() => {
+      const sessionId = params.id
+      if (!sessionId || !sdk.directory) return
+      void import("@/features/requirements/services/requirementLinkStore").then(
+        ({ consumePendingRequirementLink, createRequirementLinkDirect }) => {
+          const pending = consumePendingRequirementLink(sdk.directory!)
+          if (!pending) return
+          createRequirementLinkDirect({
+            projectId: pending.projectId,
+            projectPath: pending.projectPath,
+            requirementId: pending.requirementId,
+            requirementTitle: pending.requirementTitle,
+            sessionId,
+            sessionTitle: "",
+            sourceMode: pending.sourceMode,
+            status: "session_created",
+            content: pending.content,
+          })
+        },
+      )
+    })
+
     return (
       <SessionProviders>
         <Session />

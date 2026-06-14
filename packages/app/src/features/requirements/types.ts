@@ -2,13 +2,11 @@
 export interface RequirementItem {
   id: string
   title: string
-  status: "todo" | "doing" | "done"
+  status: "todo" | "doing" | "waiting_review" | "done" | "failed"
   priority: "high" | "medium" | "low"
-  source: string
   description: string
-  acceptanceCriteria: string[]
-  module?: string
-  tags?: string[]
+  assignee?: string
+  implementer?: string
   updatedAt: string
 }
 

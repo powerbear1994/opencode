@@ -1,42 +1,10 @@
 import { For, Show, createMemo, createResource, createSignal, type Component } from "solid-js"
-import { Spinner } from "@opencode-ai/ui/spinner"
 import { Icon } from "@opencode-ai/ui/v2/icon"
 import { useLanguage } from "@/context/language"
-import { useServer } from "@/context/server"
 import { useRequirements } from "./provider"
-import { useExecutionStore } from "./services/executionStore"
-import { useRequirementLinks } from "./services/requirementLinkStore"
-import type { ExecutionStatus, RequirementItem } from "./types"
+import { StatusBadge, PriorityBadge } from "./badge"
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-
-const STATUS_COLORS: Record<RequirementItem["status"], string> = {
-  todo: "bg-[var(--v2-text-text-muted)]/15 text-[var(--v2-text-text-muted)]",
-  doing: "bg-[var(--v2-color-blue-400)]/15 text-[var(--v2-color-blue-400)]",
-  done: "bg-[var(--v2-color-green-400)]/15 text-[var(--v2-color-green-400)]",
-}
-
-const PRIORITY_COLORS: Record<RequirementItem["priority"], string> = {
-  high: "bg-[var(--v2-color-red-400)]",
-  medium: "bg-[var(--v2-color-yellow-400)]",
-  low: "bg-[var(--v2-text-text-faint)]",
-}
-
-const EXECUTION_STATUS_COLORS: Record<ExecutionStatus, string> = {
-  not_started: "bg-[var(--v2-text-text-faint)]/15 text-[var(--v2-text-text-faint)]",
-  prompt_created: "bg-[var(--v2-color-blue-400)]/15 text-[var(--v2-color-blue-400)]",
-  prompt_generated: "bg-[var(--v2-color-blue-400)]/15 text-[var(--v2-color-blue-400)]",
-  filled_to_chat: "bg-[var(--v2-color-yellow-400)]/15 text-[var(--v2-color-yellow-400)]",
-  raw_filled_to_session: "bg-[var(--v2-color-yellow-400)]/15 text-[var(--v2-color-yellow-400)]",
-  prompt_filled_to_session: "bg-[var(--v2-color-yellow-400)]/15 text-[var(--v2-color-yellow-400)]",
-  session_created: "bg-[var(--v2-color-green-400)]/15 text-[var(--v2-color-green-400)]",
-  raw_session_created: "bg-[var(--v2-color-green-400)]/15 text-[var(--v2-color-green-400)]",
-  prompt_session_created: "bg-[var(--v2-color-green-400)]/15 text-[var(--v2-color-green-400)]",
-  implementing: "bg-[var(--v2-color-purple-400)]/15 text-[var(--v2-color-purple-400)]",
-  waiting_review: "bg-[var(--v2-color-yellow-400)]/15 text-[var(--v2-color-yellow-400)]",
-  done: "bg-[var(--v2-color-green-400)]/30 text-[var(--v2-color-green-400)]",
-  failed: "bg-[var(--v2-color-red-400)]/15 text-[var(--v2-color-red-400)]",
-}
 
 function formatDate(iso: string): string {
   try {
@@ -51,31 +19,10 @@ function formatDate(iso: string): string {
 
 export const RequirementList: Component<{
   onSelect: (id: string) => void
+  selectedId?: string | null
 }> = (props) => {
   const backend = useRequirements()
   const language = useLanguage()
-  const server = useServer()
-  const exec = useExecutionStore()
-  const linkStore = useRequirementLinks()
-
-  const projectDir = createMemo(() => {
-    const last = server.projects.last()
-    if (last) return last
-    const list = server.projects.list()
-    if (list.length > 0) return list[0].worktree
-    return ""
-  })
-
-  /** Get display status for a requirement: prefer link store, fall back to old store */
-  function displayStatusFor(reqId: string): string {
-    const primary = linkStore.getPrimaryLink(projectDir(), reqId)
-    if (primary) return primary.status
-    return exec.statusFor(projectDir(), reqId)
-  }
-
-  function hasLinkedSession(reqId: string): boolean {
-    return linkStore.getLinksByRequirement(projectDir(), reqId).length > 0 || !!exec.getRecord(projectDir(), reqId)?.sessionId
-  }
   const [search, setSearch] = createSignal("")
 
   const [data, { refetch }] = createResource(() => backend.listRequirements())
@@ -88,8 +35,7 @@ export const RequirementList: Component<{
       (r) =>
         r.title.toLowerCase().includes(q) ||
         r.id.toLowerCase().includes(q) ||
-        r.description.toLowerCase().includes(q) ||
-        r.tags?.some((t) => t.toLowerCase().includes(q)),
+        r.description.toLowerCase().includes(q),
     )
   })
 
@@ -108,7 +54,7 @@ export const RequirementList: Component<{
             value={search()}
             onInput={(e) => setSearch(e.currentTarget.value)}
             placeholder={language.t("requirements.list.searchPlaceholder")}
-            class="w-full h-8 pl-8 pr-3 rounded-[6px] bg-[var(--v2-background-bg-layer-01)] text-[13px] text-[var(--v2-text-text-base)] placeholder:text-[var(--v2-text-text-faint)] outline-none border border-transparent focus:border-[var(--v2-color-blue-400)] transition-colors"
+            class="w-full h-8 pl-8 pr-3 rounded-[6px] bg-[var(--v2-background-bg-layer-01)] text-[13px] text-[var(--v2-text-text-base)] placeholder:text-[var(--v2-text-text-faint)] outline-none border border-transparent focus:border-[var(--v2-blue-400)] transition-colors"
           />
         </div>
       </div>
@@ -154,63 +100,30 @@ export const RequirementList: Component<{
                 <button
                   type="button"
                   onClick={() => props.onSelect(req.id)}
-                  class="w-full text-left p-3 rounded-[8px] bg-[var(--v2-background-bg-deep)] hover:bg-[var(--v2-background-bg-layer-01)] transition-colors cursor-pointer border border-transparent hover:border-[var(--v2-border-border-base)]"
+                  class="w-full text-left p-3 transition-colors cursor-pointer border rounded-[8px] relative"
+                  classList={{
+                    "bg-[var(--v2-background-bg-deep)] hover:bg-[var(--v2-background-bg-layer-01)] border-transparent hover:border-[var(--v2-border-border-base)]": req.id !== props.selectedId,
+                    "bg-[var(--v2-background-bg-layer-01)] border-[var(--v2-border-border-base)] hover:bg-[var(--v2-background-bg-layer-02)]": req.id === props.selectedId,
+                  }}
                 >
+                  {/* Selected indicator */}
+                  <Show when={req.id === props.selectedId}>
+                    <div class="absolute left-0 top-[5px] bottom-[5px] w-[2.5px] bg-[var(--v2-blue-400)] rounded-r-[2px]" />
+                  </Show>
+
                   {/* Title row */}
                   <div class="flex items-start justify-between gap-2 mb-1">
                     <span class="text-[13px] font-[530] text-[var(--v2-text-text-base)] truncate">{req.title}</span>
-                    <span class="shrink-0 text-[11px] font-[440] text-[var(--v2-text-text-faint)]">
+                    <span class="shrink-0 text-[10px] font-[440] text-[var(--v2-text-text-faint)]">
                       {formatDate(req.updatedAt)}
                     </span>
                   </div>
 
                   {/* Primary badges row */}
                   <div class="flex items-center gap-1.5 flex-wrap">
-                    {/* External status */}
-                    <span
-                      class={`inline-block rounded-[3px] px-1.5 py-0.5 text-[10px] font-[440] capitalize ${STATUS_COLORS[req.status]}`}
-                    >
-                      {language.t(`requirements.status.${req.status}`)}
-                    </span>
-
-                    {/* Priority dot */}
-                    <span class="inline-flex items-center gap-1">
-                      <span class={`inline-block size-2 rounded-full ${PRIORITY_COLORS[req.priority]}`} />
-                      <span class="text-[10px] text-[var(--v2-text-text-faint)]">
-                        {language.t(`requirements.priority.${req.priority}`)}
-                      </span>
-                    </span>
-
-                    {/* Execution status */}
-                    <Show when={displayStatusFor(req.id) !== "not_started"}>
-                      <span
-                        class={`inline-block rounded-[3px] px-1.5 py-0.5 text-[10px] font-[440] ${EXECUTION_STATUS_COLORS[displayStatusFor(req.id) as ExecutionStatus]}`}
-                      >
-                        {language.t(`requirements.execution.status.${displayStatusFor(req.id)}`)}
-                      </span>
-                    </Show>
-
-                    {/* Linked session indicator */}
-                    <Show when={hasLinkedSession(req.id)}>
-                      <span class="inline-flex items-center gap-1 text-[10px] text-[var(--v2-color-green-400)]">
-                        <span class="inline-block size-1.5 rounded-full bg-[var(--v2-color-green-400)]" />
-                        {language.t("requirements.execution.linkedSession")}
-                      </span>
-                    </Show>
+                    <StatusBadge status={req.status} />
+                    <PriorityBadge priority={req.priority} />
                   </div>
-
-                  {/* Tags row (secondary, only when present) */}
-                  <Show when={req.tags && req.tags!.length > 0}>
-                    <div class="flex items-center gap-1 flex-wrap mt-1">
-                      <For each={req.tags?.slice(0, 3)}>
-                        {(tag) => (
-                          <span class="inline-block rounded-[3px] px-1.5 py-0.5 text-[9px] bg-[var(--v2-background-bg-layer-02)] text-[var(--v2-text-text-faint)]">
-                            {tag}
-                          </span>
-                        )}
-                      </For>
-                    </div>
-                  </Show>
                 </button>
               )}
             </For>

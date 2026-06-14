@@ -5,8 +5,6 @@ import type { RequirementItem } from "../types"
  * Pure function — independent of any data source.
  */
 export function buildRawContent(req: RequirementItem): string {
-  const criteria = req.acceptanceCriteria.map((c, i) => `${i + 1}. ${c}`).join("\n")
-
   return [
     "请基于当前项目处理以下原始需求：",
     "",
@@ -18,9 +16,6 @@ export function buildRawContent(req: RequirementItem): string {
     "",
     `【需求描述】`,
     req.description,
-    "",
-    `【验收标准】`,
-    criteria,
   ].join("\n")
 }
 
@@ -29,21 +24,13 @@ export function buildRawContent(req: RequirementItem): string {
  * Pure function — independent of any data source.
  */
 export function generatePrompt(req: RequirementItem): string {
-  const criteria = req.acceptanceCriteria.map((c, i) => `${i + 1}. ${c}`).join("\n")
-
   return [
     `## Requirement: ${req.id} — ${req.title}`,
     ``,
-    `**Source:** ${req.source}`,
     `**Priority:** ${req.priority}`,
-    `**Module:** ${req.module ?? "N/A"}`,
-    `**Tags:** ${req.tags?.join(", ") ?? "N/A"}`,
     ``,
     `### Description`,
     req.description,
-    ``,
-    `### Acceptance Criteria`,
-    criteria,
     ``,
     `### Execution Method`,
     ``,
