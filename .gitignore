@@ -25,6 +25,7 @@ a.out
 target
 .scripts
 .direnv/
+.omx
 
 # Local dev files
 opencode-dev

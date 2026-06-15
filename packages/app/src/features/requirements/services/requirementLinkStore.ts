@@ -200,7 +200,7 @@ export function createRequirementLinkDirect(
     }
 
     setStore(store!.length, newLink)
-    saveLinks([...store!, newLink])
+    saveLinks([...store!])
     return newLink
   }
 

@@ -105,7 +105,11 @@ export const SessionRequirementCard: Component<{
                     <ButtonV2
                       size="small"
                       variant="ghost"
-                      onClick={() => navigate(`/requirements?selectedId=${link.requirementId}`)}
+                      onClick={() =>
+                        navigate(
+                          `/requirements?project=${encodeURIComponent(props.projectId)}&selectedId=${encodeURIComponent(link.requirementId)}`,
+                        )
+                      }
                     >
                       {language.t("requirements.card.viewDetail")}
                     </ButtonV2>

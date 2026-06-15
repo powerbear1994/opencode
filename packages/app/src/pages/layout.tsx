@@ -138,8 +138,11 @@ export default function Layout(props: ParentProps) {
   const isRequirementsRoute = createMemo(() => location.pathname === "/requirements")
   const route = createMemo(() => {
     const slug = params.dir
-    if (!slug) return { slug, dir: "" }
-    const dir = decode64(slug)
+    const dir = slug
+      ? decode64(slug)
+      : isRequirementsRoute()
+        ? new URLSearchParams(location.search).get("project") ?? ""
+        : ""
     if (!dir) return { slug, dir: "" }
     const store = serverSync.peek(dir, { bootstrap: false })
     return {
@@ -2348,10 +2351,12 @@ export default function Layout(props: ParentProps) {
       helpLabel={() => language.t("sidebar.help")}
       onOpenHelp={() => platform.openLink("https://opencode.ai/desktop-feedback")}
       requirementsLabel={() => language.t("sidebar.requirements")}
-      onOpenRequirements={() => navigate("/requirements")}
+      onOpenRequirements={() => {
+        const project = currentProject()
+        navigate(project ? `/requirements?project=${encodeURIComponent(project.worktree)}` : "/requirements")
+      }}
       renderPanel={() => {
-        const project = () =>
-          currentProject() ?? (isRequirementsRoute() ? layout.projects.list()[0] : undefined)
+        const project = () => currentProject()
         return mobile ? (
           <SidebarPanel project={project} mobile />
         ) : (

@@ -602,8 +602,16 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     })
   }
 
+  const [agentsQuery, globalProvidersQuery, providersQuery] = useQueries(() => ({
+    queries: [
+      queryOptions.agents(pathKey(sdk.directory)),
+      queryOptions.providers(null),
+      queryOptions.providers(pathKey(sdk.directory)),
+    ],
+  }))
+
   const agentList = createMemo(() =>
-    sync.data.agent
+    (agentsQuery.data ?? sync.data.agent)
       .filter((agent) => !agent.hidden && agent.mode !== "primary")
       .map((agent): AtOption => ({ type: "agent", name: agent.name, display: agent.name })),
   )
@@ -1316,14 +1324,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       void handleSubmit(event)
     }
   }
-
-  const [agentsQuery, globalProvidersQuery, providersQuery] = useQueries(() => ({
-    queries: [
-      queryOptions.agents(pathKey(sdk.directory)),
-      queryOptions.providers(null),
-      queryOptions.providers(pathKey(sdk.directory)),
-    ],
-  }))
 
   const agentsLoading = () => agentsQuery.isLoading
   const agentsShouldFadeIn = createMemo((prev) => prev ?? agentsLoading())

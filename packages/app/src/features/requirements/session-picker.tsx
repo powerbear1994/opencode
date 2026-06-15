@@ -58,9 +58,9 @@ export const SessionPicker: Component<{
   }
 
   return (
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div
-        class="bg-[var(--v2-background-bg-base)] rounded-[10px] border border-[var(--v2-border-border-base)] shadow-[var(--v2-elevation-overlay)] w-[400px] max-h-[70vh] flex flex-col"
+        class="bg-[var(--v2-background-bg-base)] rounded-[10px] border border-[var(--v2-border-border-base)] shadow-[var(--v2-elevation-overlay)] w-full max-w-[400px] max-h-[70vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -102,7 +102,7 @@ export const SessionPicker: Component<{
                     req: `${props.currentReqId} ${props.requirementTitle}`,
                   })}
                 </p>
-                <div class="flex items-center gap-2 pt-2">
+                <div class="flex flex-wrap items-center justify-end gap-2 pt-2">
                   <ButtonV2 size="small" variant="ghost" onClick={() => setConfirmingSession(null)}>
                     {language.t("requirements.picker.cancel")}
                   </ButtonV2>

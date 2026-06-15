@@ -1,14 +1,15 @@
-import { For, Show, createMemo, createResource, createSignal, type Component } from "solid-js"
+import { For, Show, createEffect, createMemo, createResource, createSignal, type Component } from "solid-js"
 import { useNavigate } from "@solidjs/router"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { Icon } from "@opencode-ai/ui/v2/icon"
 import { base64Encode } from "@opencode-ai/core/util/encode"
 import { useLanguage } from "@/context/language"
-import { ServerConnection, useServer } from "@/context/server"
+import { useServer } from "@/context/server"
 import { showToast } from "@/utils/toast"
 import { useRequirements, generatePrompt, buildRawContent } from "./provider"
 import { useRequirementLinks, storePendingRequirementLink } from "./services/requirementLinkStore"
 import { SessionPicker } from "./session-picker"
+import { resolveRequirementProject } from "./project-context"
 // import { PromptPanel } from "./prompt-panel"
 import { StatusBadge, PriorityBadge } from "./badge"
 import type { RequirementSendMode, ExecutionStatus, LinkStatus } from "./types"
@@ -42,16 +43,12 @@ function safeDate(iso: string | undefined | null): string {
   return d.toLocaleDateString()
 }
 
-interface ProjectContext {
-  server: ServerConnection.Key
-  directory: string
-}
-
 // ── Component ───────────────────────────────────────────────────────────────
 
 export const RequirementDetail: Component<{
   id: string
   onBack: () => void
+  project?: string
 }> = (props) => {
   const backend = useRequirements()
   const language = useLanguage()
@@ -59,27 +56,31 @@ export const RequirementDetail: Component<{
   const navigate = useNavigate()
   const linkStore = useRequirementLinks()
 
-  const [data] = createResource(() => props.id, (id) => backend.getRequirementDetail(id))
+  const [data, { refetch }] = createResource(() => props.id, (id) => backend.getRequirementDetail(id))
   const [generatedPrompt, setGeneratedPrompt] = createSignal<string | null>(null)
   const [showPicker, setShowPicker] = createSignal(false)
   const [creating, setCreating] = createSignal(false)
   const [showCreateConfirm, setShowCreateConfirm] = createSignal(false)
   const [sidebarVisible, setSidebarVisible] = createSignal(false)
 
-  function getProjectContext(): ProjectContext | null {
-    const last = server.projects.last()
-    if (last) return { server: server.key, directory: last }
-    const list = server.projects.list()
-    if (list.length > 0) return { server: server.key, directory: list[0].worktree }
-    return null
-  }
-
-  const projectDir = createMemo(() => getProjectContext()?.directory ?? "")
+  const projectDir = createMemo(
+    () =>
+      resolveRequirementProject(
+        props.project,
+        server.projects.list().map((project) => project.worktree),
+        server.projects.last(),
+      ) ?? "",
+  )
+  const hasProject = createMemo(() => projectDir().length > 0)
 
   const reqLinks = createMemo(() =>
     linkStore.getLinksByRequirement(projectDir(), props.id).filter((l) => !!l.sessionId),
   )
   const hasLinks = createMemo(() => reqLinks().length > 0)
+
+  createEffect(() => {
+    if (props.id && hasLinks()) setSidebarVisible(true)
+  })
 
   // ── Content builders ─────────────────────────────────────────────────────
 
@@ -100,8 +101,10 @@ export const RequirementDetail: Component<{
     if (creating()) return
     const req = data()!
     if (!req) return
-    const ctx = getProjectContext()
-    if (!ctx) { showToast({ title: language.t("requirements.action.noProjectContext"), variant: "default" }); return }
+    if (!hasProject()) {
+      showToast({ title: language.t("requirements.action.noProjectContext"), variant: "default" })
+      return
+    }
 
     setCreating(true)
     try {
@@ -110,15 +113,15 @@ export const RequirementDetail: Component<{
 
       // Store a pending link so the session creation flow can bind it
       storePendingRequirementLink({
-        projectId: ctx.directory,
-        projectPath: ctx.directory,
+        projectId: projectDir(),
+        projectPath: projectDir(),
         requirementId: req.id,
         requirementTitle: req.title,
         sourceMode: mode,
         content,
       })
 
-      navigate(`/${base64Encode(ctx.directory)}/session?prompt=${encodeURIComponent(content)}`)
+      navigate(`/${base64Encode(projectDir())}/session?prompt=${encodeURIComponent(content)}`)
     } finally {
       setCreating(false)
     }
@@ -142,15 +145,14 @@ export const RequirementDetail: Component<{
     setShowPicker(false)
     const req = data()!
     if (!req) return
-    const ctx = getProjectContext()
-    if (!ctx) return
+    if (!hasProject()) return
 
     const content = generatedPrompt() || getRawContent()
     const mode: RequirementSendMode = generatedPrompt() ? "prompt" : "raw"
 
     linkStore.createLink({
-      projectId: ctx.directory,
-      projectPath: ctx.directory,
+      projectId: projectDir(),
+      projectPath: projectDir(),
       requirementId: req.id,
       requirementTitle: req.title,
       sessionId: session.id,
@@ -178,11 +180,19 @@ export const RequirementDetail: Component<{
   }
 
   /** Pick the most meaningful status across all linked sessions */
-  function aggregateStatus(): string | null {
+  function aggregateStatus(): LinkStatus | null {
     if (!hasLinks()) return null
     const statuses = reqLinks().map((l) => l.status)
     // Priority: implementing > waiting_review > session_created > filled_to_session > done > failed > not_started
-    const order = ["implementing", "waiting_review", "session_created", "filled_to_session", "done", "failed", "not_started"]
+    const order: LinkStatus[] = [
+      "implementing",
+      "waiting_review",
+      "session_created",
+      "filled_to_session",
+      "done",
+      "failed",
+      "not_started",
+    ]
     for (const s of order) {
       if (statuses.includes(s)) return s
     }
@@ -215,7 +225,7 @@ export const RequirementDetail: Component<{
       {/* Body: center + sidebar */}
       <div class="flex-1 min-h-0 flex" style="min-width: 0">
         {/* ── Center Content ──────────────────────────────────────────────── */}
-        <div class="flex-1 min-w-0 w-full min-h-0 overflow-y-auto px-5 pb-4" style="flex: 1 1 0%; width: 100%">
+        <div class="flex-1 min-w-0 w-full min-h-0 overflow-y-auto px-5 pb-6" style="flex: 1 1 0%; width: 100%">
           <Show when={data.loading && !data()}>
             <div class="flex flex-col gap-3">
               <div class="h-6 w-2/3 rounded bg-[var(--v2-background-bg-layer-01)] animate-pulse" />
@@ -224,16 +234,28 @@ export const RequirementDetail: Component<{
             </div>
           </Show>
 
-          <Show when={!data.loading && !data()}>
+          <Show when={data.error}>
+            <div class="flex flex-col items-center gap-3 py-12">
+              <Icon name="status" size="large" class="text-[var(--v2-text-text-faint)]" />
+              <p class="text-[13px] text-[var(--v2-text-text-muted)]">
+                {language.t("requirements.detail.error")}
+              </p>
+              <ButtonV2 size="small" variant="ghost" onClick={() => refetch()}>
+                {language.t("requirements.list.retry")}
+              </ButtonV2>
+            </div>
+          </Show>
+
+          <Show when={!data.loading && !data.error && !data()}>
             <div class="flex flex-col items-center gap-3 py-12">
               <Icon name="status" size="large" class="text-[var(--v2-text-text-faint)]" />
               <p class="text-[13px] text-[var(--v2-text-text-muted)]">{language.t("requirements.detail.notFound")}</p>
             </div>
           </Show>
 
-          <Show when={data()}>
+          <Show when={!data.error && data()}>
             {(req) => (
-              <div class="flex flex-col gap-5">
+              <div class="mx-auto flex w-full max-w-[800px] flex-col gap-5">
                 {/* Title + status + metadata */}
                 <div>
                   <div class="flex items-center gap-2 mb-1.5 flex-wrap">
@@ -252,21 +274,35 @@ export const RequirementDetail: Component<{
                       }
                     </ButtonV2>
                   </div>
-                  <div class="flex items-center gap-3 flex-wrap text-[12px] text-[var(--v2-text-text-muted)]">
+                  <div class="flex items-center gap-x-4 gap-y-1.5 flex-wrap text-[12px] text-[var(--v2-text-text-muted)]">
                     <span class="font-[530]">{req().id}</span>
                     <PriorityBadge priority={req().priority} />
-                    <span>{req().assignee || "—"}</span>
-                    <span class="text-[var(--v2-text-text-faint)]">{req().implementer || "—"}</span>
-                    <span class="text-[var(--v2-text-text-faint)]">{safeDate(req().updatedAt)}</span>
+                    <span>
+                      {language.t("requirements.detail.assignee")}：
+                      <span class="text-[var(--v2-text-text-base)]">{req().assignee || "—"}</span>
+                    </span>
+                    <span>
+                      {language.t("requirements.detail.implementer")}：
+                      <span class="text-[var(--v2-text-text-base)]">{req().implementer || "—"}</span>
+                    </span>
+                    <span>
+                      {language.t("requirements.sidebar.updatedAt")}：
+                      <span class="text-[var(--v2-text-text-faint)]">{safeDate(req().updatedAt)}</span>
+                    </span>
                   </div>
                 </div>
 
                 {/* Core Actions */}
+                <Show when={!hasProject()}>
+                  <div class="rounded-[8px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-4 py-3 text-[12px] text-[var(--v2-text-text-muted)]">
+                    {language.t("requirements.detail.projectUnavailable")}
+                  </div>
+                </Show>
                 <div class="flex items-center gap-2 flex-wrap">
                   <ButtonV2
                     size="normal"
                     icon="grid-plus"
-                    disabled={creating()}
+                    disabled={creating() || !hasProject()}
                     onClick={handleCreateSession}
                   >
                     {creating()
@@ -276,7 +312,13 @@ export const RequirementDetail: Component<{
                         : language.t("requirements.action.createRequirementSession")
                     }
                   </ButtonV2>
-                  <ButtonV2 size="normal" variant="ghost" icon="plus" onClick={handleAddToExisting}>
+                  <ButtonV2
+                    size="normal"
+                    variant="ghost"
+                    icon="plus"
+                    disabled={!hasProject()}
+                    onClick={handleAddToExisting}
+                  >
                     {language.t("requirements.action.addToExistingSession")}
                   </ButtonV2>
                 </div>
@@ -289,8 +331,8 @@ export const RequirementDetail: Component<{
 
                   {/* Create Another confirm dialog */}
                   <Show when={showCreateConfirm()}>
-                    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-                      <div class="bg-[var(--v2-background-bg-base)] rounded-[10px] border border-[var(--v2-border-border-base)] shadow-[var(--v2-elevation-overlay)] w-[380px] p-4 flex flex-col gap-3">
+                    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+                      <div class="bg-[var(--v2-background-bg-base)] rounded-[10px] border border-[var(--v2-border-border-base)] shadow-[var(--v2-elevation-overlay)] w-full max-w-[380px] p-4 flex flex-col gap-3">
                         <p class="text-[13px] text-[var(--v2-text-text-base)]">
                           {language.t("requirements.action.createAnotherConfirm", { count: reqLinks().length })}
                         </p>
@@ -323,7 +365,7 @@ export const RequirementDetail: Component<{
         </div>
 
         {/* ── Right Sidebar (info only) ───────────────────────────────────── */}
-        <Show when={data()}>
+        <Show when={!data.error && data()}>
           {(req) => (
             <div
               class="w-72 shrink-0 overflow-y-auto border-l border-[var(--v2-border-border-base)] px-4 py-3"
