@@ -1,6 +1,22 @@
 import type { AgentPart as MessageAgentPart, FilePart, Part, TextPart } from "@opencode-ai/sdk/v2"
 import type { AgentPart, FileAttachmentPart, ImageAttachmentPart, Prompt } from "@/context/prompt"
 
+export function promptFromText(text: string, agent?: string): Prompt {
+  const name = agent?.trim()
+  if (!name) return [{ type: "text", content: text, start: 0, end: text.length }]
+
+  const mention = `@${name}`
+  const content = ` ${text}`
+  return [
+    { type: "agent", name, content: mention, start: 0, end: mention.length },
+    { type: "text", content, start: mention.length, end: mention.length + content.length },
+  ]
+}
+
+export function promptTextLength(prompt: Prompt) {
+  return prompt.reduce((length, part) => length + ("content" in part ? part.content.length : 0), 0)
+}
+
 type Inline =
   | {
       type: "file"

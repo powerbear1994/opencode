@@ -209,6 +209,47 @@ describe("tool.task", () => {
     },
   )
 
+  it.instance(
+    "description includes denied subagents when the user explicitly mentions an agent",
+    () =>
+      Effect.gen(function* () {
+        const agent = yield* Agent.Service
+        const build = yield* agent.get("build")
+        const registry = yield* ToolRegistry.Service
+        const description =
+          (
+            yield* registry.tools({
+              ...ref,
+              agent: build,
+              bypassAgentCheck: true,
+            })
+          ).find((tool) => tool.id === TaskTool.id)?.description ?? ""
+
+        expect(description).toContain("- alpha: Alpha agent")
+        expect(description).toContain("- zebra: Zebra agent")
+      }),
+    {
+      config: {
+        permission: {
+          task: {
+            "*": "allow",
+            zebra: "deny",
+          },
+        },
+        agent: {
+          zebra: {
+            description: "Zebra agent",
+            mode: "subagent",
+          },
+          alpha: {
+            description: "Alpha agent",
+            mode: "subagent",
+          },
+        },
+      },
+    },
+  )
+
   it.instance("execute resumes an existing task session from task_id", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service

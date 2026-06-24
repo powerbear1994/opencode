@@ -8,6 +8,7 @@ import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { response } from "../groups/location"
+import { mergeAgentFrontmatter, stringifyAgentFrontmatter, validateAgentID } from "./agent-file"
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -22,40 +23,6 @@ const BUILTIN_AGENTS = new Set([
   "summary",
 ])
 
-// ── Frontmatter serializer ─────────────────────────────────────────────────────
-
-function stringifyYamlValue(value: unknown, indent = 0): string {
-  const pad = "  ".repeat(indent)
-  if (value === null || value === undefined) return "null"
-  if (typeof value === "boolean") return value ? "true" : "false"
-  if (typeof value === "number") return String(value)
-  if (typeof value === "string") {
-    // Quote strings that contain special chars
-    if (/[:\n'"#&*!|>%@`{}[\]",\s]/.test(value) || value === "") {
-      return JSON.stringify(value)
-    }
-    return value
-  }
-  if (typeof value === "object" && !Array.isArray(value)) {
-    const entries = Object.entries(value as Record<string, unknown>)
-    if (entries.length === 0) return "{}"
-    return "\n" + entries
-      .map(([k, v]) => `${pad}  ${k}: ${stringifyYamlValue(v, indent + 1)}`)
-      .join("\n")
-  }
-  return String(value)
-}
-
-function stringifyFrontmatter(data: Record<string, unknown>): string {
-  const lines: string[] = ["---"]
-  for (const [key, value] of Object.entries(data)) {
-    if (value === undefined || value === null) continue
-    lines.push(`${key}: ${stringifyYamlValue(value)}`)
-  }
-  lines.push("---")
-  return lines.join("\n")
-}
-
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function sanitizeSlug(name: string): string {
@@ -67,12 +34,7 @@ function sanitizeSlug(name: string): string {
 }
 
 function validateSlug(name: string): void {
-  if (!name || name.trim().length === 0) {
-    throw new Error("Agent name is required")
-  }
-  if (!/^[a-z0-9._-]+$/.test(name)) {
-    throw new Error("Agent name must only contain lowercase letters, numbers, dots, underscores, and hyphens")
-  }
+  validateAgentID(name)
   if (BUILTIN_AGENTS.has(name)) {
     throw new Error(`Cannot use built-in agent name: ${name}`)
   }
@@ -99,9 +61,10 @@ export const AgentHandler = HttpApiBuilder.group(Api, "server.agent", (handlers)
       .handle(
         "agent.readFile",
         Effect.fn("AgentHandler.readFile")(function* (ctx) {
+          const id = validateAgentID(ctx.params.id)
           const location = yield* Location.Service
           const dir = agentDir(location.directory, ctx.query.agentLocation as "project" | "global")
-          const filePath = path.join(dir, `${ctx.params.id}.md`)
+          const filePath = path.join(dir, `${id}.md`)
 
           const content: string = yield* Effect.promise(() =>
             import("fs/promises").then((fsp) => fsp.readFile(filePath, "utf-8")),
@@ -110,7 +73,7 @@ export const AgentHandler = HttpApiBuilder.group(Api, "server.agent", (handlers)
           const parsed = ConfigMarkdown.parse(content)
           return yield* response(
             Effect.succeed({
-              name: ctx.params.id,
+              name: id,
               content,
               frontmatter: parsed.data as Record<string, unknown>,
               body: (parsed.content as string).trim(),
@@ -143,21 +106,10 @@ export const AgentHandler = HttpApiBuilder.group(Api, "server.agent", (handlers)
             throw new Error(`Agent "${slug}" already exists`)
           }
 
-          // Build frontmatter
-          const fm: Record<string, unknown> = {}
-          if (ctx.payload.description) fm.description = ctx.payload.description
-          if (ctx.payload.mode) fm.mode = ctx.payload.mode
-          if (ctx.payload.model) fm.model = ctx.payload.model
-          if (ctx.payload.temperature !== undefined) fm.temperature = ctx.payload.temperature
-          if (ctx.payload.color) fm.color = ctx.payload.color
-          if (ctx.payload.hidden !== undefined) fm.hidden = ctx.payload.hidden
-          if (ctx.payload.disable !== undefined) fm.disable = ctx.payload.disable
-          if (ctx.payload.permission && Object.keys(ctx.payload.permission).length > 0) {
-            fm.permission = ctx.payload.permission
-          }
+          const fm = mergeAgentFrontmatter({}, ctx.payload)
 
           const body = ctx.payload.prompt || ""
-          const frontmatter = stringifyFrontmatter(fm)
+          const frontmatter = stringifyAgentFrontmatter(fm)
           const markdown = frontmatter + "\n" + body + (body ? "\n" : "")
 
           // Write file
@@ -173,7 +125,7 @@ export const AgentHandler = HttpApiBuilder.group(Api, "server.agent", (handlers)
         "agent.update",
         Effect.fn("AgentHandler.update")(function* (ctx) {
           const fsp = yield* Effect.promise(() => import("fs/promises"))
-          const slug = sanitizeSlug(ctx.params.id)
+          const slug = validateAgentID(ctx.params.id)
           validateSlug(slug)
 
           const locationSvc = yield* Location.Service
@@ -198,24 +150,13 @@ export const AgentHandler = HttpApiBuilder.group(Api, "server.agent", (handlers)
           const existingRaw: string = yield* Effect.promise(() => fsp.readFile(filePath, "utf-8"))
           const existing = ConfigMarkdown.parse(existingRaw)
 
-          // Build frontmatter
-          const fm: Record<string, unknown> = {}
-          if (ctx.payload.description) fm.description = ctx.payload.description
-          if (ctx.payload.mode) fm.mode = ctx.payload.mode
-          if (ctx.payload.model) fm.model = ctx.payload.model
-          if (ctx.payload.temperature !== undefined) fm.temperature = ctx.payload.temperature
-          if (ctx.payload.color) fm.color = ctx.payload.color
-          if (ctx.payload.hidden !== undefined) fm.hidden = ctx.payload.hidden
-          if (ctx.payload.disable !== undefined) fm.disable = ctx.payload.disable
-          if (ctx.payload.permission && Object.keys(ctx.payload.permission).length > 0) {
-            fm.permission = ctx.payload.permission
-          }
+          const fm = mergeAgentFrontmatter(existing.data as Record<string, unknown>, ctx.payload)
 
           // Preserve existing body if no new prompt provided
           const body = ctx.payload.prompt !== undefined
             ? ctx.payload.prompt
             : (existing.content as string).trim()
-          const frontmatter = stringifyFrontmatter(fm)
+          const frontmatter = stringifyAgentFrontmatter(fm)
           const markdown = frontmatter + "\n" + body + (body ? "\n" : "")
 
           // Write file
@@ -230,7 +171,7 @@ export const AgentHandler = HttpApiBuilder.group(Api, "server.agent", (handlers)
         "agent.delete",
         Effect.fn("AgentHandler.delete")(function* (ctx) {
           const fsp = yield* Effect.promise(() => import("fs/promises"))
-          const slug = sanitizeSlug(ctx.params.id)
+          const slug = validateAgentID(ctx.params.id)
           if (BUILTIN_AGENTS.has(slug)) {
             throw new Error(`Cannot delete built-in agent: ${slug}`)
           }

@@ -108,14 +108,20 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
         if (!tab || tab.type !== "draft") throw new Error(`Draft not found: ${draftID}`)
         return tab
       },
-      newDraft(draft: Omit<DraftTab, "type" | "draftID">, prompt?: string) {
+      newDraft(draft: Omit<DraftTab, "type" | "draftID">, prompt?: string, agent?: string) {
         const draftID = uuid()
         setStore(
           produce((tabs) => {
             tabs.push({ type: "draft", draftID, ...draft })
           }),
         )
-        navigate(prompt ? `${draftHref(draftID)}&prompt=${encodeURIComponent(prompt)}` : draftHref(draftID))
+        if (!prompt) {
+          navigate(draftHref(draftID))
+          return
+        }
+        const params = new URLSearchParams({ draftId: draftID, prompt })
+        if (agent) params.set("agent", agent)
+        navigate(`/new-session?${params.toString()}`)
       },
       updateDraft(draftID: string, draft: Partial<Omit<DraftTab, "type" | "draftID">>) {
         setStore(

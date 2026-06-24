@@ -66,7 +66,7 @@ import { useSessionHashScroll } from "@/pages/session/use-session-hash-scroll"
 import { Identifier } from "@/utils/id"
 import { diffs as list } from "@/utils/diffs"
 import { Persist, persisted } from "@/utils/persist"
-import { extractPromptFromParts } from "@/utils/prompt"
+import { extractPromptFromParts, promptFromText, promptTextLength } from "@/utils/prompt"
 import { same } from "@/utils/same"
 import { formatServerError } from "@/utils/server-errors"
 import { useUsageExceededDialogs } from "./session/usage-exceeded-dialogs"
@@ -201,7 +201,7 @@ export default function Page() {
   const comments = useComments()
   const terminal = useTerminal()
   const server = useServer()
-  const [searchParams, setSearchParams] = useSearchParams<{ prompt?: string }>()
+  const [searchParams, setSearchParams] = useSearchParams<{ prompt?: string; agent?: string }>()
   const location = useLocation()
   const { params, sessionKey, workspaceKey, tabs, view } = useSessionLayout()
   const newSessionDesign = createMemo(() => settings.general.newLayoutDesigns())
@@ -211,8 +211,9 @@ export default function Page() {
     untrack(() => {
       const text = searchParams.prompt
       if (!text) return
-      prompt.set([{ type: "text", content: text, start: 0, end: text.length }], text.length)
-      setSearchParams({ ...searchParams, prompt: undefined })
+      const next = promptFromText(text, searchParams.agent)
+      prompt.set(next, promptTextLength(next))
+      setSearchParams({ ...searchParams, prompt: undefined, agent: undefined })
     })
   })
 

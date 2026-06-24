@@ -60,6 +60,21 @@ export const FileSystemGroup = HttpApiGroup.make("server.fs")
         }),
       ),
   )
+  .add(
+    HttpApiEndpoint.post("fs.write", "/api/fs/write", {
+      query: LocationQuery,
+      payload: FileSystem.WriteInput,
+      success: Location.response(Schema.Void),
+    })
+      .annotateMerge(locationQueryOpenApi)
+      .annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.fs.write",
+          summary: "Write file",
+          description: "Write one UTF-8 text file relative to the requested location.",
+        }),
+      ),
+  )
   .annotateMerge(
     OpenApi.annotations({
       title: "filesystem",

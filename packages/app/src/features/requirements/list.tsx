@@ -3,6 +3,7 @@ import { Icon } from "@opencode-ai/ui/v2/icon"
 import { useLanguage } from "@/context/language"
 import { useRequirements } from "./provider"
 import { StatusBadge, PriorityBadge } from "./badge"
+import { useRequirementWorkflow } from "./services/requirementWorkflowStore"
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -15,23 +16,44 @@ function formatDate(iso: string): string {
   }
 }
 
+type RequirementFilter = "all" | "todo" | "locked" | "doing" | "done"
+
+const FILTERS: Array<{ id: RequirementFilter; label: string }> = [
+  { id: "all", label: "全部" },
+  { id: "todo", label: "待处理" },
+  { id: "locked", label: "已锁定" },
+  { id: "doing", label: "进行中" },
+  { id: "done", label: "已完成" },
+]
+
 // ── Component ───────────────────────────────────────────────────────────────
 
 export const RequirementList: Component<{
+  project?: string
   onSelect: (id: string) => void
   selectedId?: string | null
 }> = (props) => {
   const backend = useRequirements()
   const language = useLanguage()
+  const workflow = useRequirementWorkflow()
   const [search, setSearch] = createSignal("")
+  const [filter, setFilter] = createSignal<RequirementFilter>("all")
 
-  const [data, { refetch }] = createResource(() => backend.listRequirements())
+  const [data, { refetch }] = createResource(() => props.project ?? "", (project) => backend.listRequirements(project))
 
   const filtered = createMemo(() => {
     const all = data() ?? []
     const q = search().toLowerCase().trim()
-    if (!q) return all
-    return all.filter(
+    const scoped = all.filter((r) => {
+      const locked = workflow.isLocked(props.project ?? "", r.id)
+      if (filter() === "all") return true
+      if (filter() === "locked") return locked
+      if (filter() === "doing") return r.status === "doing" || r.status === "waiting_review"
+      if (filter() === "done") return r.status === "done"
+      return r.status === "todo" && !locked
+    })
+    if (!q) return scoped
+    return scoped.filter(
       (r) =>
         r.title.toLowerCase().includes(q) ||
         r.id.toLowerCase().includes(q) ||
@@ -56,6 +78,23 @@ export const RequirementList: Component<{
             placeholder={language.t("requirements.list.searchPlaceholder")}
             class="w-full h-8 pl-8 pr-3 rounded-[6px] bg-[var(--v2-background-bg-layer-01)] text-[13px] text-[var(--v2-text-text-base)] placeholder:text-[var(--v2-text-text-faint)] outline-none border border-transparent focus:border-[var(--v2-blue-400)] transition-colors"
           />
+        </div>
+        <div class="mt-2 flex gap-1 overflow-x-auto">
+          <For each={FILTERS}>
+            {(item) => (
+              <button
+                type="button"
+                onClick={() => setFilter(item.id)}
+                class="h-7 shrink-0 rounded-[5px] px-2.5 text-[11px] font-[530] transition-colors"
+                classList={{
+                  "bg-[var(--v2-background-bg-layer-02)] text-[var(--v2-text-text-base)]": filter() === item.id,
+                  "text-[var(--v2-text-text-muted)] hover:bg-[var(--v2-overlay-simple-overlay-hover)] hover:text-[var(--v2-text-text-base)]": filter() !== item.id,
+                }}
+              >
+                {item.label}
+              </button>
+            )}
+          </For>
         </div>
       </div>
 
@@ -84,8 +123,21 @@ export const RequirementList: Component<{
           </div>
         </Show>
 
+        {/* No project selected */}
+        <Show when={!props.project && !data.loading}>
+          <div class="flex flex-col items-center gap-3 py-16 px-4 text-center">
+            <Icon name="folder" size="large" class="text-[var(--v2-text-text-faint)]" />
+            <div class="flex flex-col gap-1">
+              <p class="text-[14px] font-[530] text-[var(--v2-text-text-muted)]">未选择项目</p>
+              <p class="text-[12px] leading-relaxed text-[var(--v2-text-text-faint)]">
+                {language.t("requirements.list.noProject")}
+              </p>
+            </div>
+          </div>
+        </Show>
+
         {/* Empty */}
-        <Show when={!data.loading && !data.error && filtered().length === 0}>
+        <Show when={props.project && !data.loading && !data.error && filtered().length === 0}>
           <div class="flex flex-col items-center gap-2 py-12">
             <Icon name="status" size="large" class="text-[var(--v2-text-text-faint)]" />
             <p class="text-[13px] text-[var(--v2-text-text-muted)]">{language.t("requirements.list.empty")}</p>
@@ -112,8 +164,11 @@ export const RequirementList: Component<{
                   </Show>
 
                   {/* Title row */}
-                  <div class="flex items-start justify-between gap-2 mb-1">
-                    <span class="text-[13px] font-[530] text-[var(--v2-text-text-base)] truncate">{req.title}</span>
+                  <div class="mb-1 flex items-start justify-between gap-2">
+                    <span class="min-w-0 text-[13px] font-[530] text-[var(--v2-text-text-base)] truncate">
+                      <span class="text-[var(--v2-text-text-faint)]">{req.id}</span>{" "}
+                      {req.title}
+                    </span>
                     <span class="shrink-0 text-[10px] font-[440] text-[var(--v2-text-text-faint)]">
                       {formatDate(req.updatedAt)}
                     </span>
@@ -121,7 +176,14 @@ export const RequirementList: Component<{
 
                   {/* Primary badges row */}
                   <div class="flex items-center gap-1.5 flex-wrap">
-                    <StatusBadge status={req.status} />
+                    <Show
+                      when={workflow.isLocked(props.project ?? "", req.id)}
+                      fallback={<StatusBadge status={req.status} />}
+                    >
+                      <span class="inline-block rounded-[3px] bg-[var(--v2-green-400)]/15 px-1.5 py-0.5 text-[10px] font-[440] text-[var(--v2-green-600)]">
+                        已锁定
+                      </span>
+                    </Show>
                     <PriorityBadge priority={req.priority} />
                   </div>
                 </button>

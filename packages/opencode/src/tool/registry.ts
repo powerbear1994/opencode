@@ -75,6 +75,7 @@ export interface Interface {
     providerID: ProviderV2.ID
     modelID: ModelV2.ID
     agent: Agent.Info
+    bypassAgentCheck?: boolean
   }) => Effect.Effect<Tool.Def[]>
 }
 
@@ -249,11 +250,14 @@ export const layer = Layer.effect(
       return (yield* all()).map((tool) => tool.id)
     })
 
-    const describeTask = Effect.fn("ToolRegistry.describeTask")(function* (agent: Agent.Info) {
+    const describeTask = Effect.fn("ToolRegistry.describeTask")(function* (
+      agent: Agent.Info,
+      bypassAgentCheck?: boolean,
+    ) {
       const items = (yield* agents.list()).filter((item) => item.mode !== "primary")
-      const filtered = items.filter(
-        (item) => Permission.evaluate("task", item.name, agent.permission).action !== "deny",
-      )
+      const filtered = bypassAgentCheck
+        ? items
+        : items.filter((item) => Permission.evaluate("task", item.name, agent.permission).action !== "deny")
       const list = filtered.toSorted((a, b) => a.name.localeCompare(b.name))
       const description = list
         .map(
@@ -293,7 +297,10 @@ export const layer = Layer.effect(
               : undefined
           return {
             id: tool.id,
-            description: [output.description, tool.id === TaskTool.id ? yield* describeTask(input.agent) : undefined]
+            description: [
+              output.description,
+              tool.id === TaskTool.id ? yield* describeTask(input.agent, input.bypassAgentCheck) : undefined,
+            ]
               .filter(Boolean)
               .join("\n"),
             parameters: output.parameters,

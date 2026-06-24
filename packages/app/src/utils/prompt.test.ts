@@ -1,6 +1,37 @@
 import { describe, expect, test } from "bun:test"
 import type { Part } from "@opencode-ai/sdk/v2"
-import { extractPromptFromParts } from "./prompt"
+import { extractPromptFromParts, promptFromText } from "./prompt"
+
+describe("promptFromText", () => {
+  test("prepends an agent mention before the text", () => {
+    expect(promptFromText("实现需求", "requirement-agent")).toEqual([
+      {
+        type: "agent",
+        name: "requirement-agent",
+        content: "@requirement-agent",
+        start: 0,
+        end: 18,
+      },
+      {
+        type: "text",
+        content: " 实现需求",
+        start: 18,
+        end: 23,
+      },
+    ])
+  })
+
+  test("keeps plain text when no agent is provided", () => {
+    expect(promptFromText("实现需求")).toEqual([
+      {
+        type: "text",
+        content: "实现需求",
+        start: 0,
+        end: 4,
+      },
+    ])
+  })
+})
 
 describe("extractPromptFromParts", () => {
   test("restores multiple uploaded attachments", () => {

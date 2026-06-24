@@ -15,6 +15,12 @@ export const ReadInput = Schema.Struct({
 })
 export type ReadInput = typeof ReadInput.Type
 
+export const WriteInput = Schema.Struct({
+  path: RelativePath,
+  content: Schema.String,
+})
+export type WriteInput = typeof WriteInput.Type
+
 export const Content = Schema.Struct({
   uri: Schema.String,
   name: Schema.String.pipe(Schema.optional),
@@ -59,6 +65,7 @@ export const Event = {
 
 export interface Interface {
   readonly read: (input: ReadInput) => Effect.Effect<{ readonly content: Uint8Array; readonly mime: string }>
+  readonly write: (input: WriteInput) => Effect.Effect<void>
   readonly list: (input?: ListInput) => Effect.Effect<Entry[]>
   readonly find: (input: FindInput) => Effect.Effect<Entry[]>
   readonly glob: (input: GlobInput) => Effect.Effect<readonly Entry[]>
@@ -82,6 +89,21 @@ const baseLayer = Layer.effect(
       if (!FSUtil.contains(root, real)) return yield* Effect.die(new Error("Path escapes the location"))
       return { absolute, real, directory: location.directory, root }
     })
+    const resolveWrite = Effect.fnUntraced(function* (input: RelativePath) {
+      const absolute = path.resolve(location.directory, input)
+      if (!FSUtil.contains(location.directory, absolute))
+        return yield* Effect.die(new Error("Path escapes the location"))
+
+      let existingParent = path.dirname(absolute)
+      while (FSUtil.contains(location.directory, existingParent) && !(yield* fs.existsSafe(existingParent))) {
+        const parent = path.dirname(existingParent)
+        if (parent === existingParent) break
+        existingParent = parent
+      }
+      const realParent = yield* fs.realPath(existingParent).pipe(Effect.orDie)
+      if (!FSUtil.contains(root, realParent)) return yield* Effect.die(new Error("Path escapes the location"))
+      return { absolute, directory: location.directory, root }
+    })
     return Service.of({
       find: search.find,
       glob: search.glob,
@@ -94,6 +116,10 @@ const baseLayer = Layer.effect(
           content: yield* fs.readFile(target.real).pipe(Effect.orDie),
           mime: FSUtil.mimeType(target.real),
         }
+      }),
+      write: Effect.fn("FileSystem.write")(function* (input) {
+        const target = yield* resolveWrite(input.path)
+        yield* fs.writeWithDirs(target.absolute, input.content).pipe(Effect.orDie)
       }),
       list: Effect.fn("FileSystem.list")(function* (input = {}) {
         const target = yield* resolve(input.path)

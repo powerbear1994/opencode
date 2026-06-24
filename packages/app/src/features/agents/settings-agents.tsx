@@ -2,10 +2,12 @@ import { createEffect, createMemo, createResource, createSignal, Show, ErrorBoun
 import { useParams, useSearchParams } from "@solidjs/router"
 import { useQueryClient } from "@tanstack/solid-query"
 import { useServer } from "@/context/server"
+import { useServerSDK } from "@/context/server-sdk"
 import { useLanguage } from "@/context/language"
 import { showToast } from "@/utils/toast"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { decode64 } from "@/utils/base64"
+import { pathKey } from "@/utils/path-key"
 import type { AgentSource, AgentFormData } from "./types"
 import { isBuiltinAgent } from "./types"
 import { createAgentService, type AgentService, type ServerAuth } from "./agent-service"
@@ -35,6 +37,7 @@ function ErrorFallback(err: Error, reset: () => void) {
 
 const AgentsContent = () => {
   const server = useServer()
+  const serverSDK = useServerSDK()
   const language = useLanguage()
   const dialogFn = useDialog()
   const queryClient = useQueryClient()
@@ -96,7 +99,8 @@ const AgentsContent = () => {
     if (!svc) return
     await svc.disposeInstance()
     await queryClient.refetchQueries({
-      predicate: (query) => query.queryKey[query.queryKey.length - 1] === "agents",
+      queryKey: [serverSDK.scope, pathKey(directory()), "agents"],
+      exact: true,
     })
     await refetch()
   }
@@ -148,12 +152,11 @@ const AgentsContent = () => {
         prompt: file.body || "",
         permissions: [],
       }
-      const perms = file.frontmatter.permission as Record<string, string> | undefined
+      const perms = file.frontmatter.permission as Record<string, unknown> | undefined
       if (perms) {
-        formData.permissions = Object.entries(perms).map(([tool, action]) => ({
-          tool,
-          action: action as "allow" | "ask" | "deny",
-        }))
+        formData.permissions = Object.entries(perms).flatMap(([tool, action]) =>
+          action === "allow" || action === "ask" || action === "deny" ? [{ tool, action }] : [],
+        )
       }
       dialogFn.push(() => (
         <AgentEditor

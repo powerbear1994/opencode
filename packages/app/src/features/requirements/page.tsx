@@ -1,17 +1,28 @@
-import { createEffect, createSignal, Show, type Component } from "solid-js"
+import { createEffect, createMemo, createSignal, Show, type Component } from "solid-js"
 import { useSearchParams } from "@solidjs/router"
 import { getFilename } from "@opencode-ai/core/util/path"
+import { Icon } from "@opencode-ai/ui/v2/icon"
 import { useLanguage } from "@/context/language"
+import { useServer } from "@/context/server"
 import { RequirementsProvider } from "./provider"
 import { RequirementList } from "./list"
 import { RequirementDetail } from "./detail"
+import { resolveRequirementProject } from "./project-context"
 
 // ── Inner Content (has access to RequirementsProvider context) ──────────
 
 const RequirementsContent: Component = () => {
   const language = useLanguage()
+  const server = useServer()
   const [selectedId, setSelectedId] = createSignal<string | null>(null)
   const [searchParams, setSearchParams] = useSearchParams<{ selectedId?: string; project?: string }>()
+  const projectDir = createMemo(() =>
+    resolveRequirementProject(
+      searchParams.project,
+      server.projects.list().map((project) => project.worktree),
+      server.projects.last(),
+    ),
+  )
 
   // Support navigating from chat session card with ?selectedId=REQ-001
   createEffect(() => {
@@ -21,20 +32,20 @@ const RequirementsContent: Component = () => {
 
   const handleSelect = (id: string) => {
     setSelectedId(id)
-    setSearchParams({ selectedId: id })
+    setSearchParams({ project: projectDir(), selectedId: id })
   }
 
   const handleBack = () => {
     setSelectedId(null)
-    setSearchParams({ selectedId: undefined })
+    setSearchParams({ project: projectDir(), selectedId: undefined })
   }
 
   return (
     <div class="flex flex-col h-full min-h-0 w-full">
       {/* Header */}
-      <header class="shrink-0 flex items-center justify-between gap-4 px-5 pt-4 pb-3">
+      <header class="shrink-0 flex items-center justify-between gap-4 border-b border-[var(--v2-border-border-base)] px-5 pt-4 pb-3">
         <h1 class="text-[16px] font-[530] text-[var(--v2-text-text-base)]">{language.t("requirements.title")}</h1>
-        <Show when={searchParams.project}>
+        <Show when={projectDir()}>
           {(project) => (
             <p
               class="min-w-0 truncate text-[12px] text-[var(--v2-text-text-muted)]"
@@ -58,7 +69,7 @@ const RequirementsContent: Component = () => {
             "hidden lg:block lg:w-[300px] lg:shrink-0 xl:w-[340px]": !!selectedId(),
           }}
         >
-          <RequirementList onSelect={handleSelect} selectedId={selectedId()} />
+          <RequirementList project={projectDir()} onSelect={handleSelect} selectedId={selectedId()} />
         </div>
 
         {/* Detail panel */}
@@ -67,15 +78,28 @@ const RequirementsContent: Component = () => {
             <RequirementDetail
               id={selectedId()!}
               onBack={handleBack}
-              project={searchParams.project}
+              project={projectDir()}
             />
           </div>
         </Show>
         <Show when={!selectedId()}>
           <div class="hidden flex-1 items-center justify-center xl:flex">
-            <p class="text-[13px] text-[var(--v2-text-text-muted)]">
-              {language.t("requirements.detail.selectHint")}
-            </p>
+            <Show
+              when={projectDir()}
+              fallback={
+                <div class="flex flex-col items-center gap-3 text-center">
+                  <Icon name="folder" size="large" class="text-[var(--v2-text-text-faint)]" />
+                  <p class="text-[14px] font-[530] text-[var(--v2-text-text-muted)]">未选择项目</p>
+                  <p class="text-[12px] text-[var(--v2-text-text-faint)]">
+                    {language.t("requirements.list.noProject")}
+                  </p>
+                </div>
+              }
+            >
+              <p class="text-[13px] text-[var(--v2-text-text-muted)]">
+                {language.t("requirements.detail.selectHint")}
+              </p>
+            </Show>
           </div>
         </Show>
       </div>

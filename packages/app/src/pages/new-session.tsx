@@ -7,6 +7,7 @@ import { usePrompt } from "@/context/prompt"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { createSessionComposerState, SessionComposerRegion } from "@/pages/session/composer"
+import { promptFromText, promptTextLength } from "@/utils/prompt"
 
 /**
  * The `/new-session` draft page. Unlike `session.tsx`, this only renders the prompt
@@ -18,7 +19,7 @@ export default function NewSessionPage() {
   const sdk = useSDK()
   const sync = useSync()
   const comments = useComments()
-  const [searchParams, setSearchParams] = useSearchParams<{ prompt?: string }>()
+  const [searchParams, setSearchParams] = useSearchParams<{ prompt?: string; agent?: string }>()
 
   let inputRef: HTMLDivElement | undefined
 
@@ -40,8 +41,9 @@ export default function NewSessionPage() {
     untrack(() => {
       const text = searchParams.prompt
       if (!text) return
-      prompt.set([{ type: "text", content: text, start: 0, end: text.length }], text.length)
-      setSearchParams({ ...searchParams, prompt: undefined })
+      const next = promptFromText(text, searchParams.agent)
+      prompt.set(next, promptTextLength(next))
+      setSearchParams({ ...searchParams, prompt: undefined, agent: undefined })
     })
   })
 

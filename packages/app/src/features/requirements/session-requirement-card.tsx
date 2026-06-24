@@ -9,7 +9,7 @@ import type { LinkStatus } from "./types"
 
 const STATUS_OPTIONS: LinkStatus[] = ["implementing", "waiting_review", "done", "failed"]
 
-// Simple inline status color lookup — avoids depending on ExecutionStatus type
+// Simple inline status color lookup for requirement-session links.
 function statusColor(status: string): string {
   const map: Record<string, string> = {
     not_started: "bg-[var(--v2-text-text-faint)]/15 text-[var(--v2-text-text-faint)]",

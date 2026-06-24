@@ -186,14 +186,9 @@ export const AgentEditor: Component<AgentEditorProps> = (props) => {
     if (!normalizedName() || !!nameError() || !state.form.description.trim()) {
       missing.general = true
     }
-    if (!state.form.prompt.trim()) {
-      missing.prompt = true
-    }
     return missing
   })
-  const valid = createMemo(
-    () => !!normalizedName() && !nameError() && !!state.form.description.trim() && !!state.form.prompt.trim(),
-  )
+  const valid = createMemo(() => !!normalizedName() && !nameError() && !!state.form.description.trim())
 
   const handleSave = () => {
     if (!valid()) return

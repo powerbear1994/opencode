@@ -222,16 +222,16 @@ export function createAgentService(auth: ServerAuth, directory: string): AgentSe
           location: data.location,
           description: data.description || undefined,
           mode: data.mode,
-          model: data.model || undefined,
-          temperature: data.temperature || undefined,
-          color: data.color || undefined,
+          model: data.model,
+          temperature: data.temperature,
+          color: data.color,
           hidden: data.hidden,
           disable: data.disable,
           permission:
             data.permissions.length > 0
               ? Object.fromEntries(data.permissions.map((p) => [p.tool, p.action]))
               : undefined,
-          prompt: data.prompt || undefined,
+          prompt: data.prompt,
         },
         auth,
       )
@@ -245,16 +245,16 @@ export function createAgentService(auth: ServerAuth, directory: string): AgentSe
           location: data.location,
           description: data.description || undefined,
           mode: data.mode,
-          model: data.model || undefined,
-          temperature: data.temperature || undefined,
-          color: data.color || undefined,
+          model: data.model,
+          temperature: data.temperature,
+          color: data.color,
           hidden: data.hidden,
           disable: data.disable,
           permission:
             data.permissions.length > 0
               ? Object.fromEntries(data.permissions.map((p) => [p.tool, p.action]))
               : undefined,
-          prompt: data.prompt || undefined,
+          prompt: data.prompt,
         },
         auth,
       )
