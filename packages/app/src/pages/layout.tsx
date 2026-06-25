@@ -135,12 +135,17 @@ export default function Layout(props: ParentProps) {
   createEffect(() => setV2Toast(newDesign()))
   const initialDirectory = decode64(params.dir)
   const location = useLocation()
-  const isRequirementsRoute = createMemo(() => location.pathname === "/requirements")
+  const isWorkflowRoute = createMemo(() =>
+    location.pathname === "/requirements" ||
+    location.pathname === "/design" ||
+    location.pathname === "/development" ||
+    location.pathname === "/test",
+  )
   const route = createMemo(() => {
     const slug = params.dir
     const dir = slug
       ? decode64(slug)
-      : isRequirementsRoute()
+      : isWorkflowRoute()
         ? new URLSearchParams(location.search).get("project") ?? ""
         : ""
     if (!dir) return { slug, dir: "" }
@@ -1283,10 +1288,14 @@ export default function Layout(props: ParentProps) {
     return root
   }
 
-  async function navigateToProject(directory: string | undefined) {
+  async function navigateToProject(directory: string | undefined, options?: { forceSession?: boolean }) {
     if (!directory) return
     const root = projectRoot(directory)
     server.projects.touch(root)
+    if (isWorkflowRoute() && !options?.forceSession) {
+      navigate(`${location.pathname}?project=${encodeURIComponent(root)}`)
+      return
+    }
     const project = layout.projects.list().find((item) => item.worktree === root)
     let dirs = project
       ? effectiveWorkspaceOrder(root, [root, ...(project.sandboxes ?? [])], store.workspaceOrder[root])
@@ -2355,6 +2364,21 @@ export default function Layout(props: ParentProps) {
         const project = currentProject()
         navigate(project ? `/requirements?project=${encodeURIComponent(project.worktree)}` : "/requirements")
       }}
+      designLabel={() => language.t("sidebar.design")}
+      onOpenDesign={() => {
+        const project = currentProject()
+        navigate(project ? `/design?project=${encodeURIComponent(project.worktree)}` : "/design")
+      }}
+      developmentLabel={() => "开发"}
+      onOpenDevelopment={() => {
+        const project = currentProject()
+        navigate(project ? `/development?project=${encodeURIComponent(project.worktree)}` : "/development")
+      }}
+      testLabel={() => "测试"}
+      onOpenTest={() => {
+        const project = currentProject()
+        navigate(project ? `/test?project=${encodeURIComponent(project.worktree)}` : "/test")
+      }}
       renderPanel={() => {
         const project = () => currentProject()
         return mobile ? (
@@ -2368,7 +2392,7 @@ export default function Layout(props: ParentProps) {
 
   return (
     <Show
-      when={!newDesign() || isRequirementsRoute()}
+      when={!newDesign() || isWorkflowRoute()}
       fallback={
         <div class="relative bg-v2-background-bg-deep flex-1 min-h-0 min-w-0 flex flex-col select-none [&_input]:select-text [&_textarea]:select-text [&_[contenteditable]]:select-text">
           {autoselecting() ?? ""}

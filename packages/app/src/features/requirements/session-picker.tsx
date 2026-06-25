@@ -14,6 +14,7 @@ export const SessionPicker: Component<{
   requirementId: string
   requirementTitle: string
   currentReqId: string
+  agent?: string
   onSelect: (session: Session) => void
   onCancel: () => void
   onCreateNew: () => void
@@ -23,7 +24,9 @@ export const SessionPicker: Component<{
   const linkStore = useRequirementLinks()
 
   const [store] = serverSync.child(props.projectId, { bootstrap: true })
-  const sessions = createMemo(() => sortedRootSessions(store, Date.now()))
+  const sessions = createMemo(() =>
+    sortedRootSessions(store, Date.now()).filter((session) => !props.agent || session.agent === props.agent),
+  )
 
   const [confirmingSession, setConfirmingSession] = createSignal<Session | null>(null)
 

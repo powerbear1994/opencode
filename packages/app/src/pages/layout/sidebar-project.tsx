@@ -1,4 +1,4 @@
-import { createMemo, For, Show, type Accessor, type JSX } from "solid-js"
+import { createMemo, For, onCleanup, Show, type Accessor, type JSX } from "solid-js"
 import { createStore } from "solid-js/store"
 import { base64Encode } from "@opencode-ai/core/util/encode"
 import { Button } from "@opencode-ai/ui/button"
@@ -23,7 +23,7 @@ export type ProjectSidebarContext = {
   onProjectMouseLeave: (worktree: string) => void
   onProjectFocus: (worktree: string) => void
   onHoverOpenChanged: (worktree: string, hovered: boolean) => void
-  navigateToProject: (directory: string) => void
+  navigateToProject: (directory: string, options?: { forceSession?: boolean }) => void
   openSidebar: () => void
   closeProject: (directory: string) => void
   showEditProjectDialog: (project: LocalProject) => void
@@ -63,7 +63,7 @@ const ProjectTile = (props: {
   onProjectMouseEnter: (worktree: string, event: MouseEvent) => void
   onProjectMouseLeave: (worktree: string) => void
   onProjectFocus: (worktree: string) => void
-  navigateToProject: (directory: string) => void
+  navigateToProject: (directory: string, options?: { forceSession?: boolean }) => void
   showEditProjectDialog: (project: LocalProject) => void
   toggleProjectWorkspaces: (project: LocalProject) => void
   workspacesEnabled: (project: LocalProject) => boolean
@@ -84,6 +84,33 @@ const ProjectTile = (props: {
       .dirs()
       .filter((directory) => notification.project.unseenCount(directory) > 0)
       .forEach((directory) => notification.project.markViewed(directory))
+  let clickTimer: ReturnType<typeof setTimeout> | undefined
+
+  function cancelProjectClick() {
+    if (!clickTimer) return
+    clearTimeout(clickTimer)
+    clickTimer = undefined
+  }
+
+  function handleProjectClick() {
+    cancelProjectClick()
+    clickTimer = setTimeout(() => {
+      props.setOpen(false)
+      if (props.selected()) {
+        layout.sidebar.toggle()
+        return
+      }
+      props.navigateToProject(props.project.worktree)
+    }, 180)
+  }
+
+  function handleProjectDoubleClick() {
+    cancelProjectClick()
+    props.setOpen(false)
+    props.navigateToProject(props.project.worktree, { forceSession: true })
+  }
+
+  onCleanup(cancelProjectClick)
 
   return (
     <ContextMenu
@@ -134,14 +161,8 @@ const ProjectTile = (props: {
           if (props.suppressHover()) return
           props.onProjectFocus(props.project.worktree)
         }}
-        onClick={() => {
-          props.setOpen(false)
-          if (props.selected()) {
-            layout.sidebar.toggle()
-            return
-          }
-          props.navigateToProject(props.project.worktree)
-        }}
+        onClick={handleProjectClick}
+        onDblClick={handleProjectDoubleClick}
         onBlur={() => props.setOpen(false)}
       >
         <ProjectIcon project={props.project} notify working={props.isWorking()} />

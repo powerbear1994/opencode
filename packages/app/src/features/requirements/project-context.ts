@@ -1,9 +1,9 @@
 export function resolveRequirementProject(
   requested: string | undefined,
   projects: string[],
-  last: string | undefined,
+  fallback?: string,
 ) {
   if (requested) return projects.includes(requested) ? requested : undefined
-  if (last && projects.includes(last)) return last
-  return projects[0]
+  if (fallback && projects.includes(fallback)) return fallback
+  return undefined
 }

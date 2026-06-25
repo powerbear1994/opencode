@@ -41,6 +41,7 @@ import { StickyAccordionHeader } from "@opencode-ai/ui/sticky-accordion-header"
 import { TextField } from "@opencode-ai/ui/text-field"
 import { TextReveal } from "@opencode-ai/ui/text-reveal"
 import { TextShimmer } from "@opencode-ai/ui/text-shimmer"
+import { Tooltip } from "@opencode-ai/ui/tooltip"
 import type {
   AssistantMessage,
   Message as MessageType,
@@ -68,6 +69,8 @@ import { useSync } from "@/context/sync"
 import { notifySessionTabsRemoved } from "@/components/titlebar-session-events"
 import { messageAgentColor } from "@/utils/agent"
 import { sessionTitle } from "@/utils/session-title"
+import { useRequirementLinks } from "@/features/requirements/services/requirementLinkStore"
+import type { RequirementSessionLink } from "@/features/requirements/types"
 import { makeTimer } from "@solid-primitives/timer"
 import { MessageComment, SummaryDiff, Timeline, TimelineRow, TimelineRowMap } from "./message-timeline.data"
 
@@ -79,6 +82,94 @@ const idle = { type: "idle" as const }
 
 type FramedTimelineRow = Exclude<TimelineRow.TimelineRow, { _tag: "BottomSpacer" }>
 type TimelineRowByTag<T extends TimelineRow.TimelineRow["_tag"]> = Extract<TimelineRow.TimelineRow, { _tag: T }>
+
+function workflowLabel(sourceMode: string | undefined) {
+  if (sourceMode === "test") return "测试"
+  if (sourceMode === "development") return "开发"
+  return sourceMode === "design" ? "设计" : "需求"
+}
+
+function workflowPath(sourceMode: string | undefined) {
+  if (sourceMode === "test") return "test"
+  if (sourceMode === "development") return "development"
+  return sourceMode === "design" ? "design" : "requirements"
+}
+
+function WorkflowReturnButton(props: { links: RequirementSessionLink[] }) {
+  const navigate = useNavigate()
+  const [open, setOpen] = createSignal(false)
+  const primary = createMemo(() => props.links[0])
+  const label = createMemo(() => {
+    const link = primary()
+    if (!link) return "返回关联任务"
+    if (props.links.length > 1) return "返回关联任务"
+    return `返回${workflowLabel(link.sourceMode)}`
+  })
+
+  function openLink(link: RequirementSessionLink) {
+    setOpen(false)
+    const project = link.projectId || link.projectPath || ""
+    navigate(
+      `/${workflowPath(link.sourceMode)}?project=${encodeURIComponent(project)}&selectedId=${encodeURIComponent(link.requirementId)}`,
+    )
+  }
+
+  return (
+    <Show when={primary()}>
+      {(link) => (
+        <Show
+          when={props.links.length > 1}
+          fallback={
+            <Tooltip value={label()} placement="bottom">
+              <IconButton
+                icon="link"
+                variant="ghost"
+                class="size-6 rounded-md"
+                onClick={() => openLink(link())}
+                aria-label={label()}
+              />
+            </Tooltip>
+          }
+        >
+          <Tooltip value={label()} placement="bottom">
+            <DropdownMenu gutter={4} placement="bottom-end" open={open()} onOpenChange={setOpen}>
+              <DropdownMenu.Trigger
+                as={IconButton}
+                icon="link"
+                variant="ghost"
+                class="size-6 rounded-md data-[expanded]:bg-surface-base-active"
+                aria-label={label()}
+                aria-expanded={open()}
+              />
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content style={{ "min-width": "240px" }}>
+                  <DropdownMenu.Group>
+                    <DropdownMenu.GroupLabel class="!px-2 !py-1">关联任务</DropdownMenu.GroupLabel>
+                    <For each={props.links}>
+                      {(item) => (
+                        <DropdownMenu.Item onSelect={() => openLink(item)}>
+                          <div class="flex min-w-0 flex-1 items-center gap-2">
+                            <span class="shrink-0 rounded-[3px] bg-surface-base-active px-1.5 py-0.5 text-10-medium text-text-weak">
+                              {workflowLabel(item.sourceMode)}
+                            </span>
+                            <span class="shrink-0 text-11-medium text-text-weaker">{item.requirementId}</span>
+                            <DropdownMenu.ItemLabel class="truncate">
+                              {item.requirementTitle || item.requirementId}
+                            </DropdownMenu.ItemLabel>
+                          </div>
+                        </DropdownMenu.Item>
+                      )}
+                    </For>
+                  </DropdownMenu.Group>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu>
+          </Tooltip>
+        </Show>
+      )}
+    </Show>
+  )
+}
 
 function sameKeys(a: readonly string[] | undefined, b: readonly string[] | undefined) {
   if (a === b) return true
@@ -294,9 +385,15 @@ export function MessageTimeline(props: {
   const language = useLanguage()
   const { params, sessionKey } = useSessionKey()
   const platform = usePlatform()
+  const linkStore = useRequirementLinks()
 
   let virtualizer: VirtualizerHandle | undefined
   const sessionID = createMemo(() => params.id)
+  const workflowLinks = createMemo(() => {
+    const id = sessionID()
+    if (!id) return []
+    return linkStore.links.filter((link) => link.sessionId === id)
+  })
   const sessionMessages = createMemo(() => {
     const id = sessionID()
     if (!id) return emptyMessages
@@ -1401,6 +1498,7 @@ export function MessageTimeline(props: {
               <Show when={sessionID()} keyed>
                 {(id) => (
                   <div class="shrink-0 flex items-center gap-3">
+                    <WorkflowReturnButton links={workflowLinks()} />
                     <SessionContextUsage placement="bottom" />
                     <Show when={!parentID()}>
                       <DropdownMenu

@@ -1,7 +1,7 @@
 import { createSimpleContext } from "@opencode-ai/ui/context"
 import type { RequirementItem, RequirementProvider } from "./types"
 
-export { buildRawContent } from "./services/promptBuilder"
+export { buildDesignContent, buildDevelopmentContent, buildRawContent, buildTestContent } from "./services/promptBuilder"
 
 // ── Mock Data ────────────────────────────────────────────────────────────────
 
@@ -9,7 +9,7 @@ const MOCK_REQUIREMENTS: Omit<RequirementItem, "projectId" | "projectPath">[] = 
   {
     id: "REQ-001",
     title: "编写一个记账案例",
-    status: "todo",
+    status: "pending",
     priority: "high",
     description:
       "\n" +
@@ -85,7 +85,7 @@ const MOCK_REQUIREMENTS: Omit<RequirementItem, "projectId" | "projectPath">[] = 
   {
     id: "REQ-002",
     title: "支持会话导出为 Markdown",
-    status: "doing",
+    status: "confirming",
     priority: "medium",
     description:
       "用户希望将会话内容（消息、代码变更、终端输出）导出为 Markdown 文件，便于文档归档、团队分享以及保留 AI 辅助开发的个人记录。",
@@ -107,7 +107,7 @@ const MOCK_REQUIREMENTS: Omit<RequirementItem, "projectId" | "projectPath">[] = 
   {
     id: "REQ-004",
     title: "实现 MCP 工具权限自动批准规则",
-    status: "waiting_review",
+    status: "confirming",
     priority: "medium",
     description:
       "频繁使用 MCP 工具的用户希望能够为特定工具或工具模式创建自动批准规则，减少每次调用工具都需要手动批准的繁琐操作，同时保持安全边界。",
@@ -118,7 +118,7 @@ const MOCK_REQUIREMENTS: Omit<RequirementItem, "projectId" | "projectPath">[] = 
   {
     id: "REQ-005",
     title: "增加会话分支指示器",
-    status: "failed",
+    status: "pending",
     priority: "low",
     description: "在会话中使用 Git 分支时，用户希望在会话头部直接看到当前所在分支，避免误提交到错误的分支上。",
     assignee: "张三",

@@ -30,7 +30,7 @@ function migrateOldRecords(): RequirementSessionLink[] | null {
         requirementTitle: old.requirementTitle ?? "",
         sessionId: old.sessionId,
         sessionTitle: old.sessionTitle ?? "",
-        sourceMode: "raw",
+        sourceMode: old.sourceMode ?? "raw",
         status: migrateStatus(old.status ?? "not_started"),
         isPrimary: true,
         content: old.content ?? old.prompt ?? "",
@@ -69,26 +69,42 @@ function migrateStatus(old: string): LinkStatus {
 
 // ── Normalization ─────────────────────────────────────────────────────────────
 
-function normalize(raw: any): RequirementSessionLink {
+type StoredRequirementSessionLink = Partial<RequirementSessionLink> & {
+  sourceMode?: RequirementSendMode
+  status?: LinkStatus
+}
+
+function normalize(raw: unknown): RequirementSessionLink {
+  const link = typeof raw === "object" && raw !== null ? raw as StoredRequirementSessionLink : {}
   return {
-    id: raw.id ?? uuid(),
-    projectId: raw.projectId ?? "",
-    projectName: raw.projectName,
-    projectPath: raw.projectPath,
-    requirementId: raw.requirementId ?? "",
-    requirementTitle: raw.requirementTitle ?? "",
-    sessionId: raw.sessionId ?? "",
-    sessionTitle: raw.sessionTitle ?? "",
-    sessionDirectory: raw.sessionDirectory,
-    sourceMode: "raw",
-    status: raw.status ?? "not_started",
-    isPrimary: raw.isPrimary,
-    content: raw.content,
-    createdAt: raw.createdAt ?? new Date().toISOString(),
-    updatedAt: raw.updatedAt ?? new Date().toISOString(),
-    startedAt: raw.startedAt,
-    completedAt: raw.completedAt,
+    id: link.id ?? uuid(),
+    projectId: link.projectId ?? "",
+    projectName: link.projectName,
+    projectPath: link.projectPath,
+    requirementId: link.requirementId ?? "",
+    requirementTitle: link.requirementTitle ?? "",
+    sessionId: link.sessionId ?? "",
+    sessionTitle: link.sessionTitle ?? "",
+    sessionDirectory: link.sessionDirectory,
+    sourceMode: link.sourceMode ?? "raw",
+    status: link.status ?? "not_started",
+    isPrimary: link.isPrimary,
+    content: link.content,
+    createdAt: link.createdAt ?? new Date().toISOString(),
+    updatedAt: link.updatedAt ?? new Date().toISOString(),
+    startedAt: link.startedAt,
+    completedAt: link.completedAt,
   }
+}
+
+function uniqueLinks(links: RequirementSessionLink[]) {
+  const seen = new Set<string>()
+  return links.filter((link) => {
+    const key = `${link.projectId}\u0000${link.requirementId}\u0000${link.sessionId}\u0000${link.sourceMode}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
 function loadLinks(): RequirementSessionLink[] {
@@ -96,13 +112,13 @@ function loadLinks(): RequirementSessionLink[] {
   try {
     // Try migration first
     const migrated = migrateOldRecords()
-    if (migrated) return migrated
+    if (migrated) return uniqueLinks(migrated)
 
     const raw = window.localStorage.getItem(STORAGE_KEY)
     if (!raw) return []
     const parsed = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
-    return parsed.map(normalize)
+    return uniqueLinks(parsed.map(normalize))
   } catch {
     return []
   }
@@ -113,6 +129,18 @@ function saveLinks(links: RequirementSessionLink[]): void {
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(links))
   } catch {}
+}
+
+function sameLink(
+  a: Pick<RequirementSessionLink, "projectId" | "requirementId" | "sessionId" | "sourceMode">,
+  b: Pick<RequirementSessionLink, "projectId" | "requirementId" | "sessionId" | "sourceMode">,
+) {
+  return (
+    a.projectId === b.projectId &&
+    a.requirementId === b.requirementId &&
+    a.sessionId === b.sessionId &&
+    a.sourceMode === b.sourceMode
+  )
 }
 
 // ── Pending Link (for new sessions not yet created) ─────────────────────────
@@ -186,6 +214,9 @@ export function createRequirementLinkDirect(
 
   // If the reactive store is initialized, use it (keeps UI reactive)
   if (setStore) {
+    const duplicate = store!.find((item) => sameLink(item, link))
+    if (duplicate) return duplicate
+
     const existing = store!.filter(
       (l) => l.projectId === link.projectId && l.requirementId === link.requirementId,
     )
@@ -206,6 +237,9 @@ export function createRequirementLinkDirect(
 
   // Fallback: write directly to localStorage (reactive store not yet initialized)
   const links = loadLinks()
+  const duplicate = links.find((item) => sameLink(item, link))
+  if (duplicate) return duplicate
+
   const existing = links.filter(
     (l) => l.projectId === link.projectId && l.requirementId === link.requirementId,
   )
@@ -256,6 +290,9 @@ export function useRequirementLinks() {
   function createLink(link: Omit<RequirementSessionLink, "id" | "createdAt" | "updatedAt">): RequirementSessionLink {
     const now = new Date().toISOString()
     // If this is the first link for the requirement, make it primary
+    const duplicate = links.find((item) => sameLink(item, link))
+    if (duplicate) return duplicate
+
     const existing = getLinksByRequirement(link.projectId, link.requirementId)
     const isFirst = existing.length === 0
 

@@ -7,17 +7,23 @@ import { base64Encode } from "@opencode-ai/core/util/encode"
 import { useLanguage } from "@/context/language"
 import { useServer } from "@/context/server"
 import { useServerSDK } from "@/context/server-sdk"
+import { useServerSync } from "@/context/server-sync"
 import { showToast } from "@/utils/toast"
 import { useRequirements, buildRawContent } from "./provider"
 import { useRequirementLinks, storePendingRequirementLink } from "./services/requirementLinkStore"
 import { SessionPicker } from "./session-picker"
 import { resolveRequirementProject } from "./project-context"
-import { loadRequirementDocument, saveRequirementDocument } from "./services/requirementDocument"
+import {
+  loadRequirementDocument,
+  requirementDocumentPath,
+  saveRequirementDocument,
+} from "./services/requirementDocument"
 import { useRequirementWorkflow } from "./services/requirementWorkflowStore"
+import { StageStatusTimeline, type StageStatusItem } from "./stage-status-timeline"
 import type { Session } from "@opencode-ai/sdk/v2/client"
 
 const REQUIREMENT_AGENT = "requirement-agent"
-const STAGE_LABELS = ["需求", "设计", "开发", "测试"] as const
+const STAGE_LABELS = ["需求阶段", "设计阶段", "开发阶段", "测试阶段"] as const
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -42,13 +48,13 @@ function isNotFound(error: unknown) {
 
 export const RequirementDetail: Component<{
   id: string
-  onBack: () => void
   project?: string
 }> = (props) => {
   const backend = useRequirements()
   const language = useLanguage()
   const server = useServer()
   const serverSDK = useServerSDK()
+  const serverSync = useServerSync()
   const navigate = useNavigate()
   const linkStore = useRequirementLinks()
   const workflow = useRequirementWorkflow()
@@ -74,7 +80,8 @@ export const RequirementDetail: Component<{
   const [clarifiedView, setClarifiedView] = createSignal<"edit" | "preview">("preview")
   const [showCreateConfirm, setShowCreateConfirm] = createSignal(false)
   const [sidebarVisible, setSidebarVisible] = createSignal(true)
-  const [document, { mutate: mutateDocument }] = createResource(
+  const [syncingDocument, setSyncingDocument] = createSignal(false)
+  const [document, { mutate: mutateDocument, refetch: refetchDocument }] = createResource(
     () => {
       const req = data()
       const project = projectDir()
@@ -85,12 +92,62 @@ export const RequirementDetail: Component<{
   )
   const documentDirty = createMemo(() => documentDraft() !== (document()?.content ?? ""))
   const locked = createMemo(() => workflow.isLocked(projectDir(), props.id))
-  const designGenerated = createMemo(() => !!workflow.getRecord(projectDir(), props.id)?.designGeneratedAt)
+  const workflowRecord = createMemo(() => workflow.getRecord(projectDir(), props.id))
+  const designGenerated = createMemo(() => !!workflowRecord()?.designGeneratedAt)
+  const developmentGenerated = createMemo(() => !!workflowRecord()?.developmentGeneratedAt)
+  const testGenerated = createMemo(() => !!workflowRecord()?.testGeneratedAt)
+  const designLocked = createMemo(() => workflow.isDesignLocked(projectDir(), props.id))
+  const developmentLocked = createMemo(() => workflow.isDevelopmentLocked(projectDir(), props.id))
+  const testLocked = createMemo(() => workflow.isTestLocked(projectDir(), props.id))
+  const stageStatusItems = createMemo<StageStatusItem[]>(() =>
+    STAGE_LABELS.map((stage, index) => {
+      const active =
+        (index === 0 && !locked()) ||
+        (index === 1 && locked() && !designLocked()) ||
+        (index === 2 && designLocked() && !developmentLocked()) ||
+        (index === 3 && developmentLocked() && !testLocked())
+      const complete =
+        (index === 0 && locked()) ||
+        (index === 1 && designLocked()) ||
+        (index === 2 && developmentLocked()) ||
+        (index === 3 && testLocked())
+      const value = () => {
+        if (index === 0) return locked() ? "已完成" : document() ? "待确认" : "待生成"
+        if (index === 1) {
+          if (!locked()) return "未开始"
+          if (designLocked()) return "已完成"
+          if (designGenerated()) return "待确认"
+          return "待生成"
+        }
+        if (index === 2) {
+          if (!designLocked()) return "未开始"
+          if (developmentLocked()) return "已完成"
+          if (developmentGenerated()) return "待确认"
+          return "待生成"
+        }
+        if (!developmentLocked()) return "未开始"
+        if (testLocked()) return "已完成"
+        if (testGenerated()) return "待确认"
+        return "待生成"
+      }
+      return { label: stage, value: value(), active, complete }
+    }),
+  )
 
+  const sessionStore = createMemo(() => (projectDir() ? serverSync.child(projectDir(), { bootstrap: true })[0] : undefined))
+  const sessionById = createMemo(() => new Map((sessionStore()?.session ?? []).map((session) => [session.id, session] as const)))
+  const sessionAgent = (sessionId: string) => sessionById().get(sessionId)?.agent
+  const sessionTitle = (sessionId: string, fallback: string) => sessionById().get(sessionId)?.title || fallback
   const reqLinks = createMemo(() =>
-    linkStore.getLinksByRequirement(projectDir(), props.id).filter((l) => !!l.sessionId),
+    linkStore.getLinksByRequirement(projectDir(), props.id).filter((l) => l.sourceMode === "raw" && !!l.sessionId && sessionAgent(l.sessionId) !== "design-agent"),
   )
   const hasLinks = createMemo(() => reqLinks().length > 0)
+
+  function applyDocumentRefresh(current: { content: string } | null | undefined, dirtyBeforeRefresh: boolean) {
+    if (dirtyBeforeRefresh) return
+    setDocumentDraft(current?.content ?? "")
+    if (!current) setClarifiedView("preview")
+  }
 
   createEffect(() => {
     if (props.id && hasLinks()) setSidebarVisible(true)
@@ -105,6 +162,21 @@ export const RequirementDetail: Component<{
   createEffect(() => {
     if (!locked()) return
     setClarifiedView("preview")
+  })
+
+  createEffect(() => {
+    const project = projectDir()
+    if (!project) return
+    const path = requirementDocumentPath(props.id)
+    const unsubscribe = serverSDK.event.on(project, (event) => {
+      if (event.type !== "file.watcher.updated") return
+      if (event.properties.file !== path) return
+      const dirtyBeforeRefresh = documentDirty()
+      void Promise.resolve(refetchDocument()).then((current) => {
+        applyDocumentRefresh(current, dirtyBeforeRefresh)
+      })
+    })
+    onCleanup(unsubscribe)
   })
 
   createEffect(() => {
@@ -182,6 +254,7 @@ export const RequirementDetail: Component<{
   }
 
   function handleCreateSession() {
+    if (locked()) return
     if (reqLinks().length > 0) {
       setShowCreateConfirm(true)
       return
@@ -192,6 +265,7 @@ export const RequirementDetail: Component<{
   // ── Add to Existing Session ─────────────────────────────────────────────
 
   function handleAddToExisting() {
+    if (locked()) return
     setShowPicker(true)
   }
 
@@ -202,6 +276,11 @@ export const RequirementDetail: Component<{
     if (!hasProject()) return
 
     const content = getRawContent()
+    const alreadyLinked = reqLinks().some((link) => link.sessionId === session.id)
+    if (alreadyLinked) {
+      showToast({ title: "该会话已绑定", variant: "default" })
+      return
+    }
 
     linkStore.createLink({
       projectId: projectDir(),
@@ -238,6 +317,7 @@ export const RequirementDetail: Component<{
         content: documentDraft(),
       })
       mutateDocument({ ...loaded, content: documentDraft() })
+      setClarifiedView("preview")
       showToast({ title: "需求已保存", variant: "success" })
       return true
     } catch {
@@ -245,6 +325,32 @@ export const RequirementDetail: Component<{
       return false
     } finally {
       setSavingDocument(false)
+    }
+  }
+
+  async function handleSyncFromSession() {
+    if (syncingDocument()) return
+    setSyncingDocument(true)
+    try {
+      const previous = document()
+      const dirtyBeforeRefresh = documentDirty()
+      const current = await refetchDocument()
+      if (current && current.content !== (previous?.content ?? "")) {
+        setDocumentDraft(current.content)
+        showToast({ title: "产物已从会话同步", variant: "success" })
+      } else if (current && !previous) {
+        setDocumentDraft(current.content)
+        showToast({ title: "产物已从会话同步", variant: "success" })
+      } else if (!current) {
+        if (!dirtyBeforeRefresh) setDocumentDraft("")
+        showToast({ title: "暂未发现可同步的新产物", variant: "default" })
+      } else {
+        showToast({ title: "产物已是最新", variant: "default" })
+      }
+    } catch {
+      showToast({ title: "同步产物失败", variant: "error" })
+    } finally {
+      setSyncingDocument(false)
     }
   }
 
@@ -256,11 +362,11 @@ export const RequirementDetail: Component<{
     workflow.lockRequirement(projectDir(), props.id)
     setDocumentMode("clarified")
     setClarifiedView("preview")
-    showToast({ title: "需求已锁定", variant: "success" })
+    showToast({ title: "需求已完成", variant: "success" })
   }
 
   function handleEnterDesign() {
-    showToast({ title: "设计任务已生成", variant: "default" })
+    navigate(`/design?project=${encodeURIComponent(projectDir())}&selectedId=${encodeURIComponent(props.id)}`)
   }
 
   // ── Linked Session Actions ───────────────────────────────────────────────
@@ -271,6 +377,12 @@ export const RequirementDetail: Component<{
     navigate(`/${base64Encode(dir)}/session/${link.sessionId}`)
   }
 
+  function handleUnlinkSession(linkId: string) {
+    if (locked()) return
+    linkStore.removeLink(linkId)
+    showToast({ title: "已解除会话关联", variant: "success" })
+  }
+
   return (
     <div class="relative flex flex-col h-full min-h-0">
       <Show when={!data.error && data() && sidebarVisible()}>
@@ -279,29 +391,22 @@ export const RequirementDetail: Component<{
 
       {/* Session Picker Dialog */}
       <Show when={showPicker()}>
-        <SessionPicker
-          projectId={projectDir()}
-          requirementId={props.id}
-          requirementTitle={data()?.title ?? ""}
-          currentReqId={props.id}
-          onSelect={handlePickerSelect}
-          onCancel={() => setShowPicker(false)}
-          onCreateNew={handlePickerCreateNew}
+          <SessionPicker
+            projectId={projectDir()}
+            requirementId={props.id}
+            requirementTitle={data()?.title ?? ""}
+            currentReqId={props.id}
+            agent={REQUIREMENT_AGENT}
+            onSelect={handlePickerSelect}
+            onCancel={() => setShowPicker(false)}
+            onCreateNew={handlePickerCreateNew}
         />
       </Show>
-
-      {/* Header */}
-      <div class="shrink-0 flex items-center gap-2 px-4 pt-3 pb-2">
-        <button type="button" onClick={props.onBack} class="flex items-center gap-1 text-[13px] text-[var(--v2-text-text-muted)] hover:text-[var(--v2-text-text-base)] transition-colors">
-          <Icon name="chevron-down" size="small" class="rotate-90" />
-          {language.t("requirements.detail.back")}
-        </button>
-      </div>
 
       {/* Body: center + sidebar */}
       <div class="flex-1 min-h-0 flex" style="min-width: 0">
         {/* ── Center Content ──────────────────────────────────────────────── */}
-        <div class="flex flex-col flex-1 min-w-0 w-full min-h-0 overflow-y-auto px-5 pb-6" style="flex: 1 1 0%; width: 100%">
+        <div class="flex flex-col flex-1 min-w-0 w-full min-h-0 overflow-y-auto px-5 pb-6 pt-3" style="flex: 1 1 0%; width: 100%">
           <Show when={data.loading && !data()}>
             <div class="flex flex-col gap-3">
               <div class="h-6 w-2/3 rounded bg-[var(--v2-background-bg-layer-01)] animate-pulse" />
@@ -547,82 +652,16 @@ export const RequirementDetail: Component<{
         <Show when={!data.error && data()}>
           {(req) => (
             <div
-              class="w-72 shrink-0 overflow-y-auto px-4 pb-3"
+              class="w-72 shrink-0 overflow-y-auto px-4 pb-3 pt-3"
               classList={{ hidden: !sidebarVisible() }}
             >
               <div class="flex flex-col gap-3">
                 {/* Stage status */}
                 <div class="rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] p-3">
                   <h4 class="mb-2 text-[11px] font-[530] text-[var(--v2-text-text-faint)]">阶段状态</h4>
-                  <div class="flex flex-col text-[12px]">
-                    <For each={STAGE_LABELS}>
-                      {(stage, index) => {
-                        const active = () => index() === 0
-                        const complete = () => (index() === 0 && locked()) || (index() === 1 && designGenerated())
-                        const last = () => index() === STAGE_LABELS.length - 1
-                        const stageStatus = () => {
-                          if (index() === 0) return locked() ? "已锁定" : "编辑中"
-                          if (index() === 1) return designGenerated() ? "已生成" : "未生成"
-                          return "未开始"
-                        }
-                        return (
-                          <div class="relative flex min-h-9 items-start justify-between gap-3">
-                            <div
-                              class="absolute left-[5px] top-[13px] h-[calc(100%-9px)] w-px"
-                              classList={{
-                                "hidden": last(),
-                                "bg-[var(--v2-green-500)]/70": complete(),
-                                "bg-[var(--v2-blue-400)]/50": active() && !locked(),
-                                "bg-[var(--v2-border-border-base)]": !complete() && !active(),
-                              }}
-                            />
-                            <div class="flex min-w-0 items-start gap-2.5">
-                              <div
-                                class="relative z-[1] mt-0.5 flex h-3 w-3 shrink-0 items-center justify-center rounded-full border bg-[var(--v2-background-bg-layer-01)]"
-                                classList={{
-                                  "border-[var(--v2-green-500)] shadow-[0_0_0_3px_var(--v2-green-500)/12]": complete(),
-                                  "border-[var(--v2-blue-400)] shadow-[0_0_0_3px_var(--v2-blue-400)/12]": active() && !complete(),
-                                  "border-[var(--v2-border-border-base)]": !complete() && !active(),
-                                }}
-                              >
-                                <span
-                                  class="h-1.5 w-1.5 rounded-full"
-                                  classList={{
-                                    "bg-[var(--v2-green-500)]": complete(),
-                                    "bg-[var(--v2-blue-400)]": active() && !complete(),
-                                    "bg-[var(--v2-text-text-faint)]/40": !complete() && !active(),
-                                  }}
-                                />
-                              </div>
-                              <div class="min-w-0">
-                                <p
-                                  class="font-[530] leading-[16px]"
-                                  classList={{
-                                    "text-[var(--v2-text-text-base)]": active() || complete(),
-                                    "text-[var(--v2-text-text-muted)]": !active() && !complete(),
-                                  }}
-                                >
-                                  {stage}
-                                </p>
-                              </div>
-                            </div>
-                            <span
-                              class="shrink-0 rounded-[4px] px-1.5 py-0.5 text-right text-[11px] leading-none"
-                              classList={{
-                                "bg-[var(--v2-green-500)]/10 text-[var(--v2-green-600)]": complete(),
-                                "bg-[var(--v2-blue-400)]/10 text-[var(--v2-blue-400)]": active() && !complete(),
-                                "text-[var(--v2-text-text-faint)]": !complete() && !active(),
-                              }}
-                            >
-                              {stageStatus()}
-                            </span>
-                          </div>
-                        )
-                      }}
-                    </For>
-                  </div>
+                  <StageStatusTimeline items={stageStatusItems()} />
                   <p class="mt-3 border-t border-[var(--v2-border-border-base)] pt-2 text-[11px] leading-relaxed text-[var(--v2-text-text-faint)]">
-                    锁定需求后，将自动生成设计任务。
+                    锁定需求产物后，将进入设计阶段。
                   </p>
                 </div>
 
@@ -635,50 +674,60 @@ export const RequirementDetail: Component<{
                       </span>
                       <h4 class="text-[11px] font-[530] text-[var(--v2-text-text-faint)]">关联会话</h4>
                     </div>
-                    <ButtonV2 size="small" variant="ghost-muted" icon="plus" onClick={handleAddToExisting}>
-                      绑定已有会话
-                    </ButtonV2>
+                    <Show when={!locked()}>
+                      <ButtonV2 size="small" variant="ghost-muted" icon="plus" onClick={handleAddToExisting}>
+                        绑定已有会话
+                      </ButtonV2>
+                    </Show>
                   </div>
                   <Show
                     when={hasLinks()}
                     fallback={
-                      <button
-                        type="button"
-                        onClick={handleAddToExisting}
-                        class="flex w-full items-center justify-between gap-3 rounded-[6px] border border-dashed border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-deep)] px-3 py-2.5 text-left transition-colors hover:border-[var(--v2-blue-400)]/60 hover:bg-[var(--v2-background-bg-layer-02)]"
+                      <Show
+                        when={!locked()}
+                        fallback={
+                          <div class="rounded-[6px] border border-dashed border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-deep)] px-3 py-2.5 text-[12px] text-[var(--v2-text-text-faint)]">
+                            暂无关联会话
+                          </div>
+                        }
                       >
-                        <span class="min-w-0">
-                          <span class="block text-[12px] font-[530] text-[var(--v2-text-text-muted)]">暂无关联会话</span>
-                          <span class="mt-0.5 block text-[11px] text-[var(--v2-text-text-faint)]">绑定后可从需求页快速回到智能体会话。</span>
-                        </span>
-                        <Icon name="plus" size="small" class="shrink-0 text-[var(--v2-blue-400)]" />
-                      </button>
+                        <button
+                          type="button"
+                          onClick={handleAddToExisting}
+                          class="flex w-full items-center justify-between gap-3 rounded-[6px] border border-dashed border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-deep)] px-3 py-2.5 text-left transition-colors hover:border-[var(--v2-blue-400)]/60 hover:bg-[var(--v2-background-bg-layer-02)]"
+                        >
+                          <span class="min-w-0">
+                            <span class="block text-[12px] font-[530] text-[var(--v2-text-text-muted)]">暂无关联会话</span>
+                            <span class="mt-0.5 block text-[11px] text-[var(--v2-text-text-faint)]">绑定后可从需求页快速回到智能体会话。</span>
+                          </span>
+                          <Icon name="plus" size="small" class="shrink-0 text-[var(--v2-blue-400)]" />
+                        </button>
+                      </Show>
                     }
                   >
                     <div class="flex flex-col gap-1.5">
                       <For each={reqLinks()}>
                         {(link) => (
-                          <div class="group relative overflow-hidden rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-deep)] transition-colors hover:border-[var(--v2-blue-400)]/50 hover:bg-[var(--v2-background-bg-layer-02)]">
-                            <div class="absolute bottom-0 left-0 top-0 w-0.5 bg-[var(--v2-green-500)]" />
+                          <div
+                            class="group relative overflow-hidden rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-deep)] transition-colors hover:border-[var(--v2-blue-400)]/50 hover:bg-[var(--v2-background-bg-layer-02)]"
+                            onDblClick={() => handleOpenSession(link)}
+                          >
+                            <div class="absolute bottom-0 left-0 top-0 w-0.5 bg-[var(--v2-blue-400)]" />
                             <div class="flex items-center justify-between gap-2 px-2.5 py-2">
-                              <div class="flex min-w-0 items-center gap-2">
-                                <span class="relative flex h-6 w-6 shrink-0 items-center justify-center rounded-[5px] bg-[var(--v2-green-500)]/10 text-[var(--v2-green-600)]">
-                                  <span class="absolute h-2 w-2 rounded-full bg-[var(--v2-green-500)] opacity-30 group-hover:opacity-60" />
-                                  <Icon name="status" size="small" />
-                                </span>
-                                <div class="min-w-0">
-                                  <p class="truncate text-[12px] font-[530] text-[var(--v2-text-text-base)]" title={link.sessionId}>
-                                    {link.sessionTitle || "需求智能体会话"}
-                                  </p>
-                                  <div class="mt-1 flex items-center gap-1.5">
-                                    <span class="h-1.5 w-1.5 rounded-full bg-[var(--v2-green-500)]" />
-                                    <span class="text-[11px] leading-none text-[var(--v2-green-600)]">已绑定</span>
-                                  </div>
+                              <div class="min-w-0">
+                                <p class="truncate text-[12px] font-[530] text-[var(--v2-text-text-base)]" title={link.sessionId}>
+                                  {link.sessionTitle || sessionTitle(link.sessionId, "需求智能体会话")}
+                                </p>
+                                <div class="mt-1 flex items-center gap-1.5">
+                                  <span class="h-1.5 w-1.5 rounded-full bg-[var(--v2-blue-400)]" />
+                                  <span class="text-[11px] leading-none text-[var(--v2-blue-400)]">已绑定</span>
                                 </div>
                               </div>
-                              <ButtonV2 size="small" variant="ghost-muted" class="shrink-0" onClick={() => handleOpenSession(link)}>
-                                打开
-                              </ButtonV2>
+                              <Show when={!locked()}>
+                                <ButtonV2 size="small" variant="ghost-muted" class="shrink-0" onDblClick={(event: MouseEvent) => event.stopPropagation()} onClick={() => handleUnlinkSession(link.id)}>
+                                  解绑
+                                </ButtonV2>
+                              </Show>
                             </div>
                           </div>
                         )}
@@ -691,18 +740,29 @@ export const RequirementDetail: Component<{
                 <div class="rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] p-3">
                   <h4 class="mb-2 text-[11px] font-[530] text-[var(--v2-text-text-faint)]">快捷操作</h4>
                   <div class="flex flex-col gap-2">
-                    <ButtonV2 size="normal" variant="neutral" class="w-full" onClick={handleCreateSession}>
-                      调用 @需求智能体
-                    </ButtonV2>
-                    <ButtonV2 size="normal" variant="neutral" class="w-full" onClick={() => showToast({ title: "暂未发现可同步的新产物", variant: "default" })}>
-                      从会话同步产物
-                    </ButtonV2>
-                    <ButtonV2 size="normal" variant="neutral" class="w-full" disabled={locked() || !documentDirty()} onClick={handleSaveDocument}>
-                      保存当前产物
-                    </ButtonV2>
-                    <ButtonV2 size="normal" variant="neutral" class="w-full" disabled={locked() || !document() || savingDocument()} onClick={handleLockRequirement}>
-                      锁定需求
-                    </ButtonV2>
+                    <Show
+                      when={locked()}
+                      fallback={
+                        <>
+                          <ButtonV2 size="normal" variant="neutral" class="w-full" onClick={handleCreateSession}>
+                            调用 @需求智能体
+                          </ButtonV2>
+                          <ButtonV2 size="normal" variant="neutral" class="w-full" disabled={syncingDocument()} onClick={handleSyncFromSession}>
+                            {syncingDocument() ? "刷新中..." : "刷新产物"}
+                          </ButtonV2>
+                          <ButtonV2 size="normal" variant="neutral" class="w-full" disabled={!documentDirty()} onClick={handleSaveDocument}>
+                            保存当前产物
+                          </ButtonV2>
+                          <ButtonV2 size="normal" variant="neutral" class="w-full" disabled={!document() || savingDocument()} onClick={handleLockRequirement}>
+                            锁定需求
+                          </ButtonV2>
+                        </>
+                      }
+                    >
+                      <ButtonV2 size="normal" variant="neutral" class="w-full" onClick={handleEnterDesign}>
+                        进入设计
+                      </ButtonV2>
+                    </Show>
                   </div>
                 </div>
               </div>

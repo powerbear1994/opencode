@@ -53,6 +53,9 @@ import { useCheckServerHealth } from "./utils/server-health"
 
 const HomeRoute = lazy(() => import("@/pages/home"))
 const RequirementsPage = lazy(() => import("@/features/requirements/page"))
+const DesignPage = lazy(() => import("@/features/design/page"))
+const DevelopmentPage = lazy(() => import("@/features/development/page"))
+const TestPage = lazy(() => import("@/features/test/page"))
 const Session = lazy(() => import("@/pages/session"))
 const NewSession = lazy(() => import("@/pages/new-session"))
 
@@ -88,7 +91,14 @@ const SessionRoute = Object.assign(
             requirementId: pending.requirementId,
             requirementTitle: pending.requirementTitle,
             sessionId,
-            sessionTitle: "",
+            sessionTitle:
+              pending.sourceMode === "test"
+                ? "测试智能体会话"
+                : pending.sourceMode === "development"
+                ? "开发智能体会话"
+                : pending.sourceMode === "design"
+                  ? "设计智能体会话"
+                  : "需求智能体会话",
             sourceMode: pending.sourceMode,
             status: "session_created",
             content: pending.content,
@@ -436,6 +446,9 @@ export function AppInterface(props: {
             <Route path="/" component={HomeRoute} />
             <Route path="/new-session" component={DraftRoute} />
             <Route path="/requirements" component={RequirementsPage} />
+            <Route path="/design" component={DesignPage} />
+            <Route path="/development" component={DevelopmentPage} />
+            <Route path="/test" component={TestPage} />
             <Route path="/:dir" component={DirectoryLayout}>
               <Route path="/" component={() => <Navigate href="session" />} />
               <Route path="/session/:id?" component={SessionRoute} />

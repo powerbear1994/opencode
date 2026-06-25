@@ -5,11 +5,9 @@ import type { RequirementItem } from "./types"
 // ── Status Badge ──────────────────────────────────────────────────────────
 
 const STATUS_STYLE: Record<RequirementItem["status"], string> = {
-  todo: "bg-[var(--v2-grey-400)]/15 text-[var(--v2-text-text-muted)]",
-  doing: "bg-[var(--v2-blue-400)]/15 text-[var(--v2-blue-600)]",
-  waiting_review: "bg-[var(--v2-orange-400)]/15 text-[var(--v2-orange-700)]",
+  pending: "bg-[var(--v2-grey-400)]/15 text-[var(--v2-text-text-muted)]",
+  confirming: "bg-[var(--v2-orange-400)]/15 text-[var(--v2-orange-700)]",
   done: "bg-[var(--v2-green-400)]/15 text-[var(--v2-green-600)]",
-  failed: "bg-[var(--v2-red-400)]/15 text-[var(--v2-red-600)]",
 }
 
 export const StatusBadge: Component<{ status: RequirementItem["status"] }> = (props) => {

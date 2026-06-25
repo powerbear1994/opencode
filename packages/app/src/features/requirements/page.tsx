@@ -20,24 +20,24 @@ const RequirementsContent: Component = () => {
     resolveRequirementProject(
       searchParams.project,
       server.projects.list().map((project) => project.worktree),
-      server.projects.last(),
     ),
   )
 
   // Support navigating from chat session card with ?selectedId=REQ-001
   createEffect(() => {
     const id = searchParams.selectedId
-    setSelectedId(id ?? null)
+    setSelectedId(projectDir() ? (id ?? null) : null)
   })
 
   const handleSelect = (id: string) => {
+    if (!projectDir()) return
     setSelectedId(id)
     setSearchParams({ project: projectDir(), selectedId: id })
   }
 
-  const handleBack = () => {
-    setSelectedId(null)
-    setSearchParams({ project: projectDir(), selectedId: undefined })
+  const handleDefaultSelect = (id: string) => {
+    if (!projectDir() || searchParams.selectedId) return
+    setSelectedId(id)
   }
 
   return (
@@ -59,7 +59,7 @@ const RequirementsContent: Component = () => {
       </header>
 
       {/* Body */}
-      <div class="flex-1 min-h-0 flex">
+      <div class="relative flex-1 min-h-0 flex">
         {/* List panel */}
         <div
           classList={{
@@ -69,7 +69,12 @@ const RequirementsContent: Component = () => {
             "hidden lg:block lg:w-[300px] lg:shrink-0 xl:w-[340px]": !!selectedId(),
           }}
         >
-          <RequirementList project={projectDir()} onSelect={handleSelect} selectedId={selectedId()} />
+          <RequirementList
+            project={projectDir()}
+            onSelect={handleSelect}
+            onDefaultSelect={handleDefaultSelect}
+            selectedId={selectedId()}
+          />
         </div>
 
         {/* Detail panel */}
@@ -77,18 +82,22 @@ const RequirementsContent: Component = () => {
           <div class="flex-1 min-h-0 min-w-0" style="flex: 1 1 0%; min-width: 0">
             <RequirementDetail
               id={selectedId()!}
-              onBack={handleBack}
               project={projectDir()}
             />
           </div>
         </Show>
         <Show when={!selectedId()}>
-          <div class="hidden flex-1 items-center justify-center xl:flex">
+          <div
+            class="hidden items-center justify-center xl:flex"
+            classList={{
+              "absolute inset-0": !projectDir(),
+              "flex-1": !!projectDir(),
+            }}
+          >
             <Show
               when={projectDir()}
               fallback={
-                <div class="flex flex-col items-center gap-3 text-center">
-                  <Icon name="folder" size="large" class="text-[var(--v2-text-text-faint)]" />
+                <div class="flex flex-col items-center gap-2 text-center">
                   <p class="text-[14px] font-[530] text-[var(--v2-text-text-muted)]">未选择项目</p>
                   <p class="text-[12px] text-[var(--v2-text-text-faint)]">
                     {language.t("requirements.list.noProject")}

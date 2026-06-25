@@ -4,7 +4,7 @@ export interface RequirementItem {
   projectId: string
   projectPath?: string
   title: string
-  status: "todo" | "doing" | "waiting_review" | "done" | "failed"
+  status: "pending" | "confirming" | "done"
   priority: "high" | "medium" | "low"
   description: string
   assignee?: string
@@ -22,7 +22,7 @@ export interface RequirementProvider {
   getRequirementDetail(projectId: string, id: string): Promise<RequirementItem | undefined>
 }
 
-export type RequirementSendMode = "raw"
+export type RequirementSendMode = "raw" | "design" | "development" | "test"
 
 // ── New link-based model (supports many-to-many) ───────────────────────────
 
