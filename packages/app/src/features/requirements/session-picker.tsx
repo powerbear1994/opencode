@@ -23,7 +23,7 @@ export const SessionPicker: Component<{
   const serverSync = useServerSync()
   const linkStore = useRequirementLinks()
 
-  const [store] = serverSync.child(props.projectId, { bootstrap: true })
+  const [store] = serverSync().child(props.projectId, { bootstrap: true })
   const sessions = createMemo(() =>
     sortedRootSessions(store, Date.now()).filter((session) => !props.agent || session.agent === props.agent),
   )

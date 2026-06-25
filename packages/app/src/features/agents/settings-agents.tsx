@@ -99,7 +99,7 @@ const AgentsContent = () => {
     if (!svc) return
     await svc.disposeInstance()
     await queryClient.refetchQueries({
-      queryKey: [serverSDK.scope, pathKey(directory()), "agents"],
+      queryKey: [serverSDK().scope, pathKey(directory()), "agents"],
       exact: true,
     })
     await refetch()

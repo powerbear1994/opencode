@@ -1,6 +1,6 @@
 import { For, Show, createEffect, createMemo, createResource, createSignal, onCleanup, type Component } from "solid-js"
 import { useNavigate } from "@solidjs/router"
-import { Markdown } from "@opencode-ai/ui/markdown"
+import { Markdown } from "@opencode-ai/session-ui/markdown"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { Icon } from "@opencode-ai/ui/v2/icon"
 import { base64Encode } from "@opencode-ai/core/util/encode"
@@ -134,7 +134,7 @@ export const RequirementDetail: Component<{
     }),
   )
 
-  const sessionStore = createMemo(() => (projectDir() ? serverSync.child(projectDir(), { bootstrap: true })[0] : undefined))
+  const sessionStore = createMemo(() => (projectDir() ? serverSync().child(projectDir(), { bootstrap: true })[0] : undefined))
   const sessionById = createMemo(() => new Map((sessionStore()?.session ?? []).map((session) => [session.id, session] as const)))
   const sessionAgent = (sessionId: string) => sessionById().get(sessionId)?.agent
   const sessionTitle = (sessionId: string, fallback: string) => sessionById().get(sessionId)?.title || fallback
@@ -168,7 +168,7 @@ export const RequirementDetail: Component<{
     const project = projectDir()
     if (!project) return
     const path = requirementDocumentPath(props.id)
-    const unsubscribe = serverSDK.event.on(project, (event) => {
+    const unsubscribe = serverSDK().event.on(project, (event) => {
       if (event.type !== "file.watcher.updated") return
       if (event.properties.file !== path) return
       const dirtyBeforeRefresh = documentDirty()
@@ -187,7 +187,7 @@ export const RequirementDetail: Component<{
     const unsubscribe = [...directories]
       .filter(Boolean)
       .map((directory) =>
-        serverSDK.event.on(directory, (event) => {
+        serverSDK().event.on(directory, (event) => {
           if (event.type !== "session.deleted") return
           const sessionId = event.properties.info.id
           for (const link of links) {
@@ -204,7 +204,7 @@ export const RequirementDetail: Component<{
     for (const link of reqLinks()) {
       const directory = link.sessionDirectory || link.projectPath || projectDir()
       if (!directory || !link.sessionId) continue
-      void serverSDK
+      void serverSDK()
         .createClient({ directory, throwOnError: true })
         .session.get({ sessionID: link.sessionId })
         .catch((error) => {

@@ -50,6 +50,11 @@ function agentDir(dir: string, location: "project" | "global"): string {
 // ── Handler ────────────────────────────────────────────────────────────────────
 
 export const AgentHandler = HttpApiBuilder.group(Api, "server.agent", (handlers) =>
+  handlers.handle("agent.list", () =>
+    Effect.gen(function* () {
+      return yield* response(AgentV2.Service.use((agent) => agent.all()))
+    }),
+  ),
   Effect.gen(function* () {
     return handlers
       .handle("agent.list", () =>

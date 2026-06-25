@@ -2,7 +2,7 @@ import { createEffect, createMemo, createResource, createSignal, For, onCleanup,
 import { useNavigate, useSearchParams } from "@solidjs/router"
 import { base64Encode } from "@opencode-ai/core/util/encode"
 import { getFilename } from "@opencode-ai/core/util/path"
-import { Markdown } from "@opencode-ai/ui/markdown"
+import { Markdown } from "@opencode-ai/session-ui/markdown"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { Icon } from "@opencode-ai/ui/v2/icon"
 import { useLanguage } from "@/context/language"
@@ -206,7 +206,7 @@ const DevelopmentDetail: Component<{ id: string; project?: string }> = (props) =
       return { label: stage, value: value(), active, complete }
     }),
   )
-  const sessionStore = createMemo(() => (projectDir() ? serverSync.child(projectDir(), { bootstrap: true })[0] : undefined))
+  const sessionStore = createMemo(() => (projectDir() ? serverSync().child(projectDir(), { bootstrap: true })[0] : undefined))
   const sessionById = createMemo(() => new Map((sessionStore()?.session ?? []).map((session) => [session.id, session] as const)))
   const sessionAgent = (sessionId: string) => sessionById().get(sessionId)?.agent
   const sessionTitle = (sessionId: string, fallback: string) => sessionById().get(sessionId)?.title || fallback
@@ -237,7 +237,7 @@ const DevelopmentDetail: Component<{ id: string; project?: string }> = (props) =
     const project = projectDir()
     if (!project) return
     const file = developmentDocumentPath(props.id)
-    const unsubscribe = serverSDK.event.on(project, (event) => {
+    const unsubscribe = serverSDK().event.on(project, (event) => {
       if (event.type !== "file.watcher.updated") return
       if (event.properties.file !== file) return
       const dirtyBeforeRefresh = dirty()

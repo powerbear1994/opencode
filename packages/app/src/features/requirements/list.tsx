@@ -186,7 +186,7 @@ export const RequirementList: Component<{
   createEffect(() => {
     const project = props.project
     if (!project) return
-    const unsubscribe = serverSDK.event.on(project, (event) => {
+    const unsubscribe = serverSDK().event.on(project, (event) => {
       if (event.type !== "file.watcher.updated") return
       if (!generatedPaths().has(event.properties.file)) return
       void refetchGeneratedDocuments()
