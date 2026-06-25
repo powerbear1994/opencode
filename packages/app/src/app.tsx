@@ -237,6 +237,15 @@ function LegacyServerLayout(props: ParentProps) {
   )
 }
 
+function WorkflowRouteLayout(props: ParentProps) {
+  const settings = useSettings()
+  return (
+    <Show when={settings.general.newLayoutDesigns()} fallback={<LegacyServerLayout>{props.children}</LegacyServerLayout>}>
+      {props.children}
+    </Show>
+  )
+}
+
 function DraftRoute() {
   const [search] = useSearchParams<{ draftId?: string }>()
   const tabs = useTabs()
@@ -612,10 +621,12 @@ function Routes() {
 
   return (
     <>
-      <Route path="/requirements" component={RequirementsPage} />
-      <Route path="/design" component={DesignPage} />
-      <Route path="/development" component={DevelopmentPage} />
-      <Route path="/test" component={TestPage} />
+      <Route component={WorkflowRouteLayout}>
+        <Route path="/requirements" component={RequirementsPage} />
+        <Route path="/design" component={DesignPage} />
+        <Route path="/development" component={DevelopmentPage} />
+        <Route path="/test" component={TestPage} />
+      </Route>
       <Route component={LegacyServerLayout}>
         <Show when={!settings.general.newLayoutDesigns()}>{<Route path="/" component={LegacyHome} />}</Show>
         <Route path="/:dir" component={DirectoryLayout}>

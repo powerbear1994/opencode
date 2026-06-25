@@ -1,5 +1,4 @@
 import { AgentV2 } from "@opencode-ai/core/agent"
-import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import { ConfigMarkdown } from "@opencode-ai/core/config/markdown"
 import { Global } from "@opencode-ai/core/global"
 import { Location } from "@opencode-ai/core/location"
@@ -50,16 +49,10 @@ function agentDir(dir: string, location: "project" | "global"): string {
 // ── Handler ────────────────────────────────────────────────────────────────────
 
 export const AgentHandler = HttpApiBuilder.group(Api, "server.agent", (handlers) =>
-  handlers.handle("agent.list", () =>
-    Effect.gen(function* () {
-      return yield* response(AgentV2.Service.use((agent) => agent.all()))
-    }),
-  ),
   Effect.gen(function* () {
     return handlers
       .handle("agent.list", () =>
         Effect.gen(function* () {
-          yield* PluginBoot.Service.use((plugin) => plugin.wait())
           return yield* response(AgentV2.Service.use((agent) => agent.all()))
         }),
       )
