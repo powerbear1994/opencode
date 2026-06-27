@@ -129,7 +129,9 @@ export default function LegacyLayout(props: ParentProps) {
     location.pathname === "/requirements" ||
     location.pathname === "/design" ||
     location.pathname === "/development" ||
-    location.pathname === "/test",
+    location.pathname === "/test" ||
+    location.pathname === "/skills" ||
+    location.pathname === "/agents",
   )
   const route = createMemo(() => {
     const slug = params.dir
@@ -157,7 +159,7 @@ export default function LegacyLayout(props: ParentProps) {
   const currentDir = createMemo(() => route().dir)
 
   const [state, setState] = createStore({
-    autoselect: !initialDirectory,
+    autoselect: !initialDirectory && !isWorkflowRoute(),
     busyWorkspaces: {} as Record<string, boolean>,
     hoverProject: undefined as string | undefined,
     scrollSessionKey: undefined as string | undefined,
@@ -550,6 +552,7 @@ export default function LegacyLayout(props: ParentProps) {
     await ready.promise
     await layout.ready.promise
     if (!untrack(() => state.autoselect)) return
+    if (untrack(isWorkflowRoute)) return
 
     const list = layout.projects.list()
     const last = server.projects.last()

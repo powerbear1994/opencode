@@ -74,8 +74,54 @@ export function StatusPopover() {
   )
 }
 
+export function ServerStatusPopover() {
+  const language = useLanguage()
+  const server = useServer()
+  const global = useGlobal()
+  const [shown, setShown] = createSignal(false)
+  const serverHealth = () => global.servers.health[server.key]?.healthy
+  const ready = createMemo(() => serverHealth() !== undefined)
+
+  return (
+    <Popover
+      open={shown()}
+      onOpenChange={setShown}
+      triggerAs={Button}
+      triggerProps={{
+        variant: "ghost",
+        class: "titlebar-icon w-8 h-6 p-0 box-border",
+        "aria-label": language.t("status.popover.trigger"),
+        style: { scale: 1 },
+      }}
+      trigger={
+        <div class="relative size-4">
+          <div class="badge-mask-tight size-4 flex items-center justify-center">
+            <Icon name={shown() ? "status-active" : "status"} size="small" />
+          </div>
+          <div
+            classList={{
+              "absolute -top-px -right-px size-1.5 rounded-full": true,
+              "bg-icon-success-base": ready() && serverHealth() === true,
+              "bg-icon-critical-base": serverHealth() === false,
+              "bg-border-weak-base": !ready(),
+            }}
+          />
+        </div>
+      }
+      class="[&_[data-slot=popover-body]]:p-0 w-[360px] max-w-[calc(100vw-40px)] bg-transparent border-0 shadow-none rounded-xl"
+      gutter={4}
+      placement="bottom-end"
+      shift={-168}
+    >
+      <StatusPopoverBody shown={shown()}>
+        <ServerBody />
+      </StatusPopoverBody>
+    </Popover>
+  )
+}
+
 export function StatusPopoverV2(props: { scope?: "server" }) {
-  if (props.scope === "server") return <ServerStatusPopover />
+  if (props.scope === "server") return <ServerStatusPopoverV2 />
   return <DirectoryStatusPopover />
 }
 
@@ -113,7 +159,7 @@ function DirectoryStatusPopover() {
   return <StatusPopoverView state={state()} />
 }
 
-function ServerStatusPopover() {
+function ServerStatusPopoverV2() {
   const language = useLanguage()
   const server = useServer()
   const global = useGlobal()

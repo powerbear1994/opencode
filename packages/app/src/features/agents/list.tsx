@@ -8,14 +8,17 @@ import { isBuiltinAgent, SOURCE_LABELS, MODE_LABELS } from "./types"
 
 // ── Filter tab ─────────────────────────────────────────────────────────────────
 
-const FilterTab: Component<{ active: boolean; onClick: () => void; children: any }> = (props) => (
+const FilterTab: Component<{ active: boolean; disabled?: boolean; onClick: () => void; children: any }> = (props) => (
   <button
     type="button"
     onClick={props.onClick}
-    class="px-2.5 py-1 rounded-[5px] text-[11px] font-[440] transition-colors"
+    disabled={props.disabled}
+    class="shrink-0 rounded-[5px] px-2.5 py-1 text-[11px] font-[440] transition-colors"
     classList={{
-      "bg-[var(--v2-background-bg-layer-02)] text-[var(--v2-text-text-base)]": props.active,
-      "text-[var(--v2-text-text-muted)] hover:text-[var(--v2-text-text-base)] hover:bg-[var(--v2-background-bg-layer-01)]": !props.active,
+      "bg-[var(--v2-background-bg-layer-02)] text-[var(--v2-text-text-base)]": props.active && !props.disabled,
+      "text-[var(--v2-text-text-muted)] hover:bg-[var(--v2-background-bg-layer-01)] hover:text-[var(--v2-text-text-base)]":
+        !props.active && !props.disabled,
+      "cursor-not-allowed text-[var(--v2-text-text-faint)]": props.disabled,
     }}
   >
     {props.children}
@@ -27,19 +30,17 @@ const FilterTab: Component<{ active: boolean; onClick: () => void; children: any
 interface AgentListProps {
   agents: Agent[]
   sources: Map<string, AgentSource>
+  counts: Record<AgentSource | "all", number>
   selectedId: string | null
   loading: boolean
   error: string | null
   search: string
   sourceFilter: AgentSource | "all"
+  hasProject: boolean
   onSearchChange: (value: string) => void
   onSourceFilterChange: (value: AgentSource | "all") => void
   onSelect: (id: string) => void
-  onNew: () => void
   onRefresh: () => void
-  onEdit: (id: string) => void
-  onDelete: (id: string) => void
-  onDuplicate: (id: string) => void
 }
 
 // ── Badge helpers ──────────────────────────────────────────────────────────────
@@ -55,6 +56,12 @@ const ModeBadge: Component<{ mode: string }> = (props) => (
     {MODE_LABELS[props.mode] ?? props.mode}
   </span>
 )
+
+const SOURCE_ORDER: Record<AgentSource, number> = {
+  project: 0,
+  global: 1,
+  "built-in": 2,
+}
 
 // ── Component ──────────────────────────────────────────────────────────────────
 
@@ -78,6 +85,12 @@ export const AgentList: Component<AgentListProps> = (props) => {
       )
     }
     return list
+      .slice()
+      .sort(
+        (a, b) =>
+          SOURCE_ORDER[getSource(a.name)] - SOURCE_ORDER[getSource(b.name)] ||
+          a.name.localeCompare(b.name),
+      )
   })
 
   const getSource = (name: string): AgentSource => {
@@ -86,73 +99,64 @@ export const AgentList: Component<AgentListProps> = (props) => {
   }
 
   return (
-    <div class="flex flex-col h-full min-h-0">
+    <div class="flex h-full min-h-0 flex-col">
       {/* ── Toolbar: search + new ── */}
-      <div class="shrink-0 px-4 pt-3 pb-1">
+      <div class="shrink-0 px-4 pb-2 pt-3">
         <div class="flex items-center gap-1.5">
-          <div class="relative flex-1">
-            <Icon
-              name="magnifying-glass"
-              size="small"
-              class="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--v2-text-text-faint)]"
-            />
+          <div class="relative flex h-8 flex-1 items-center">
+            <span class="pointer-events-none absolute inset-y-0 left-2.5 flex items-center text-[var(--v2-text-text-faint)]">
+              <Icon name="magnifying-glass" size="small" class="size-3.5" />
+            </span>
             <input
-              type="text"
+              type="search"
               value={props.search}
               onInput={(e) => props.onSearchChange(e.currentTarget.value)}
-              placeholder="搜索智能体..."
-              class="w-full h-8 pl-8 pr-3 rounded-[6px] bg-[var(--v2-background-bg-layer-01)] text-[13px] text-[var(--v2-text-text-base)] placeholder:text-[var(--v2-text-text-faint)] outline-none border border-transparent focus:border-[var(--v2-blue-400)] transition-colors"
+              placeholder="搜索名称或描述..."
+              class="h-8 w-full rounded-[6px] border border-transparent bg-[var(--v2-background-bg-layer-01)] pl-8 pr-3 text-[13px] leading-8 text-[var(--v2-text-text-base)] outline-none transition-colors placeholder:text-[var(--v2-text-text-faint)] focus:border-[var(--v2-blue-400)]"
             />
           </div>
           <Tooltip value="刷新列表" placement="bottom">
             <IconButton icon="arrow-undo-down" variant="ghost" size="small" onClick={props.onRefresh} />
           </Tooltip>
-          <button
-            type="button"
-            onClick={props.onNew}
-            class="shrink-0 inline-flex items-center gap-1 h-8 px-2.5 rounded-[6px] text-[12px] font-[440] text-[var(--v2-text-text-muted)] hover:text-[var(--v2-text-text-base)] hover:bg-[var(--v2-background-bg-layer-01)] active:bg-[var(--v2-background-bg-deep)] transition-colors"
-          >
-            <Icon name="plus-small" size="small" />
-            新建
-          </button>
         </div>
 
         {/* Source filter tabs */}
-        <div class="flex items-center gap-0.5 mt-1.5">
+        <div class="mt-2 flex items-center gap-0.5 overflow-x-auto">
           <FilterTab
             active={props.sourceFilter === "all"}
             onClick={() => props.onSourceFilterChange("all")}
           >
-            全部
-          </FilterTab>
-          <FilterTab
-            active={props.sourceFilter === "built-in"}
-            onClick={() => props.onSourceFilterChange("built-in")}
-          >
-            内置
+            全部 {props.counts.all}
           </FilterTab>
           <FilterTab
             active={props.sourceFilter === "project"}
+            disabled={!props.hasProject}
             onClick={() => props.onSourceFilterChange("project")}
           >
-            项目
+            项目 {props.counts.project}
           </FilterTab>
           <FilterTab
             active={props.sourceFilter === "global"}
             onClick={() => props.onSourceFilterChange("global")}
           >
-            全局
+            全局 {props.counts.global}
+          </FilterTab>
+          <FilterTab
+            active={props.sourceFilter === "built-in"}
+            onClick={() => props.onSourceFilterChange("built-in")}
+          >
+            内置 {props.counts["built-in"]}
           </FilterTab>
         </div>
       </div>
 
       {/* ── Content ── */}
-      <div class="flex-1 min-h-0 overflow-y-auto px-3 pb-3">
+      <div class="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
         {/* Loading */}
         <Show when={props.loading && filtered().length === 0}>
-          <div class="flex flex-col gap-1.5 py-1">
+          <div class="flex flex-col gap-1 py-1">
             <For each={[1, 2, 3, 4]}>
-              {() => <div class="h-[52px] rounded-[8px] bg-[var(--v2-background-bg-layer-01)] animate-pulse" />}
+              {() => <div class="h-[74px] animate-pulse rounded-[8px] bg-[var(--v2-background-bg-layer-01)]" />}
             </For>
           </div>
         </Show>
@@ -173,9 +177,9 @@ export const AgentList: Component<AgentListProps> = (props) => {
 
         {/* Empty */}
         <Show when={!props.loading && !props.error && filtered().length === 0}>
-          <div class="flex flex-col items-center gap-2 py-12">
-            <Icon name="bubble-5" size="large" class="text-[var(--v2-text-text-faint)]" />
-            <p class="text-[13px] text-[var(--v2-text-text-muted)]">暂无智能体</p>
+          <div class="flex flex-col items-center gap-2 py-12 text-center">
+            <Icon name="models" size="large" class="text-[var(--v2-text-text-faint)]" />
+            <p class="text-[13px] text-[var(--v2-text-text-muted)]">没有匹配的智能体</p>
           </div>
         </Show>
 
@@ -186,11 +190,10 @@ export const AgentList: Component<AgentListProps> = (props) => {
               {(agent) => {
                 const source = () => getSource(agent.name)
                 const isSelected = () => agent.name === props.selectedId
-                const isBuiltin = () => isBuiltinAgent(agent.name)
-
                 return (
-                  <div
-                    class="w-full text-left px-3 py-2 transition-colors cursor-pointer rounded-[7px] relative group border"
+                  <button
+                    type="button"
+                    class="group relative w-full rounded-[7px] border px-3 py-2 text-left transition-colors"
                     classList={{
                       "bg-transparent border-transparent hover:bg-[var(--v2-background-bg-layer-01)] hover:border-[var(--v2-border-border-base)]":
                         !isSelected(),
@@ -205,7 +208,7 @@ export const AgentList: Component<AgentListProps> = (props) => {
                     </Show>
 
                     {/* Row 1: name + source */}
-                    <div class="flex items-center gap-2 min-w-0">
+                    <div class="flex min-w-0 items-center gap-2">
                       <span class="text-[13px] font-[530] text-[var(--v2-text-text-base)] truncate">
                         {agent.name}
                       </span>
@@ -215,59 +218,17 @@ export const AgentList: Component<AgentListProps> = (props) => {
                       </Show>
                     </div>
 
-                    {/* Row 2: mode */}
-                    <div class="flex items-center gap-1.5 mt-1">
-                      <ModeBadge mode={agent.mode} />
-                    </div>
-
                     {/* Row 3: description (max 2 lines) */}
-                    <Show when={agent.description}>
-                      <p class="text-[11px] text-[var(--v2-text-text-muted)] leading-snug mt-1 line-clamp-2">
-                        {agent.description}
-                      </p>
-                    </Show>
-
-                    {/* Hover actions */}
-                    <div class="absolute right-2 top-2 hidden group-hover:flex items-center gap-0.5 bg-[var(--v2-background-bg-layer-01)] rounded-[6px] px-0.5">
-                      <Show when={isBuiltin()}>
-                        <Tooltip value="复制为自定义智能体" placement="top">
-                          <IconButton
-                            icon="open-file"
-                            variant="ghost"
-                            size="small"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              props.onDuplicate(agent.name)
-                            }}
-                          />
-                        </Tooltip>
-                      </Show>
-                      <Show when={!isBuiltin()}>
-                        <Tooltip value="编辑" placement="top">
-                          <IconButton
-                            icon="pencil-line"
-                            variant="ghost"
-                            size="small"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              props.onEdit(agent.name)
-                            }}
-                          />
-                        </Tooltip>
-                        <Tooltip value="删除" placement="top">
-                          <IconButton
-                            icon="circle-x"
-                            variant="ghost"
-                            size="small"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              props.onDelete(agent.name)
-                            }}
-                          />
-                        </Tooltip>
-                      </Show>
+                    <p class="mt-1 line-clamp-2 text-[11px] leading-snug text-[var(--v2-text-text-muted)]">
+                      {agent.description || "没有描述"}
+                    </p>
+                    <div class="mt-1 flex min-w-0 items-center gap-1.5">
+                      <ModeBadge mode={agent.mode} />
+                      <span class="min-w-0 truncate text-[10px] text-[var(--v2-text-text-faint)]">
+                        {agent.model ? `${agent.model.providerID}/${agent.model.modelID}` : "默认模型"}
+                      </span>
                     </div>
-                  </div>
+                  </button>
                 )
               }}
             </For>

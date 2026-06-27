@@ -67,6 +67,8 @@ const RequirementsPage = lazy(() => import("@/features/requirements/page"))
 const DesignPage = lazy(() => import("@/features/design/page"))
 const DevelopmentPage = lazy(() => import("@/features/development/page"))
 const TestPage = lazy(() => import("@/features/test/page"))
+const SkillsPage = lazy(() => import("@/features/skills/page"))
+const AgentsPage = lazy(() => import("@/features/agents/page"))
 const NewSession = lazy(() => import("@/pages/new-session"))
 
 const workflowSessionTitle = (sourceMode: string | undefined) =>
@@ -189,7 +191,7 @@ function ResolvedTargetSessionRoute() {
       server: serverKey(),
       sessionId: session.root.id,
     })
-    bindPendingRequirementSession(current.directory, params.id)
+    bindPendingRequirementSession(session.session.directory, params.id)
   })
 
   return (
@@ -630,6 +632,8 @@ function Routes() {
   return (
     <>
       <Route component={WorkflowRouteLayout}>
+        <Route path="/skills" component={SkillsPage} />
+        <Route path="/agents" component={AgentsPage} />
         <Route path="/requirements" component={RequirementsPage} />
         <Route path="/design" component={DesignPage} />
         <Route path="/development" component={DevelopmentPage} />

@@ -1,5 +1,5 @@
 import { For, Show, createSignal, createMemo, type Component } from "solid-js"
-import { Button } from "@opencode-ai/ui/button"
+import { Markdown } from "@opencode-ai/session-ui/markdown"
 import type { Agent } from "@opencode-ai/sdk/v2/client"
 import type { AgentSource } from "./types"
 import { isBuiltinAgent, SOURCE_LABELS, MODE_LABELS, PERMISSION_ACTION_LABELS } from "./types"
@@ -17,11 +17,13 @@ interface AgentDetailProps {
 
 // ── Card ───────────────────────────────────────────────────────────────────────
 
-const Card: Component<{ title: string; children: any }> = (props) => (
-  <div class="rounded-[7px] border border-[var(--v2-border-border-base)] overflow-hidden">
-    <div class="px-3.5 py-1.5 bg-[var(--v2-background-bg-deep)] border-b border-[var(--v2-border-border-base)]">
-      <h4 class="text-[10px] font-[530] text-[var(--v2-text-text-muted)] uppercase tracking-wider">{props.title}</h4>
-    </div>
+const Card: Component<{ title?: string; children: any }> = (props) => (
+  <div class="overflow-hidden rounded-[7px] border border-[var(--v2-border-border-base)]">
+    <Show when={props.title}>
+      <div class="border-b border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-deep)] px-3.5 py-1.5">
+        <h4 class="text-[10px] font-[530] text-[var(--v2-text-text-muted)] uppercase tracking-wider">{props.title}</h4>
+      </div>
+    </Show>
     <div class="px-3.5 py-2.5">{props.children}</div>
   </div>
 )
@@ -29,28 +31,41 @@ const Card: Component<{ title: string; children: any }> = (props) => (
 const Row: Component<{ label: string; value?: string | null; mono?: boolean }> = (props) => (
   <div class="flex items-center justify-between gap-3 py-0.5">
     <span class="text-[12px] text-[var(--v2-text-text-muted)] shrink-0">{props.label}</span>
-    <span class="text-[12px] text-[var(--v2-text-text-base)] text-right truncate" classList={{ "font-mono text-[11px]": props.mono }}>
+    <span
+      class="truncate text-right text-[12px] text-[var(--v2-text-text-base)]"
+      classList={{ "font-mono text-[11px]": props.mono }}
+    >
       {props.value || "—"}
     </span>
   </div>
 )
 
-// ── Tab button ─────────────────────────────────────────────────────────────────
-
-const TabBtn: Component<{ active: boolean; onClick: () => void; children: any }> = (props) => (
-  <button type="button" onClick={props.onClick}
-    class="px-3 py-1.5 text-[12px] font-[440] border-b-2 transition-colors"
-    classList={{
-      "text-[var(--v2-text-text-base)] border-[var(--v2-blue-400)]": props.active,
-      "text-[var(--v2-text-text-muted)] border-transparent hover:text-[var(--v2-text-text-base)]": !props.active,
-    }}
-  >{props.children}</button>
+const SourceBadge: Component<{ source: AgentSource }> = (props) => (
+  <span class="shrink-0 rounded-[3px] bg-[var(--v2-blue-400)]/10 px-1.5 py-px text-[10px] font-[530] leading-snug text-[var(--v2-blue-500)]">
+    {SOURCE_LABELS[props.source]}
+  </span>
 )
 
 // ── Permission helpers ─────────────────────────────────────────────────────────
 
-interface RawRule { action?: string; resource?: string; effect?: string }
-const CORE_KEYS = new Set(["read","edit","bash","grep","glob","list","lsp","webfetch","websearch","skill","task"])
+interface RawRule {
+  action?: string
+  resource?: string
+  effect?: string
+}
+const CORE_KEYS = new Set([
+  "read",
+  "edit",
+  "bash",
+  "grep",
+  "glob",
+  "list",
+  "lsp",
+  "webfetch",
+  "websearch",
+  "skill",
+  "task",
+])
 
 function splitRules(rules: RawRule[]): { core: RawRule[]; adv: RawRule[] } {
   const core: RawRule[] = []
@@ -74,23 +89,29 @@ function splitRules(rules: RawRule[]): { core: RawRule[]; adv: RawRule[] } {
 // ── Action badge ───────────────────────────────────────────────────────────────
 
 const ActionBadge: Component<{ effect: string }> = (props) => (
-  <span class="inline-block px-1.5 py-px rounded-[4px] text-[11px] font-[440]"
+  <span
+    class="inline-block rounded-[4px] px-1.5 py-px text-[11px] font-[440]"
     classList={{
       "text-[var(--v2-green-600)] bg-[var(--v2-green-400)]/10": props.effect === "allow",
       "text-[var(--v2-amber-600)] bg-[var(--v2-amber-400)]/10": props.effect === "ask",
       "text-[var(--v2-red-600)] bg-[var(--v2-red-400)]/10": props.effect === "deny",
-      "text-[var(--v2-text-text-muted)] bg-[var(--v2-background-bg-deep)]": !["allow","ask","deny"].includes(props.effect),
+      "text-[var(--v2-text-text-muted)] bg-[var(--v2-background-bg-deep)]": !["allow", "ask", "deny"].includes(props.effect),
     }}
   >
     {PERMISSION_ACTION_LABELS[props.effect as keyof typeof PERMISSION_ACTION_LABELS] ?? props.effect}
   </span>
 )
 
+const secondaryButton = () =>
+  "inline-flex h-8 items-center gap-1.5 rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-3 text-[12px] font-[530] text-[var(--v2-text-text-base)] transition-colors hover:bg-[var(--v2-background-bg-layer-02)] disabled:cursor-not-allowed disabled:opacity-60"
+
+const dangerButton = () =>
+  "inline-flex h-8 items-center gap-1.5 rounded-[6px] border border-[var(--v2-red-400)]/40 bg-[var(--v2-red-400)]/10 px-3 text-[12px] font-[530] text-[var(--v2-red-600)] transition-colors hover:bg-[var(--v2-red-400)]/15 disabled:cursor-not-allowed disabled:opacity-60"
+
 // ── Component ──────────────────────────────────────────────────────────────────
 
 export const AgentDetail: Component<AgentDetailProps> = (props) => {
   const isBuiltin = () => isBuiltinAgent(props.agent?.name ?? "")
-  const [tab, setTab] = createSignal<"overview" | "permissions" | "prompt">("overview")
   const [showAdvanced, setShowAdvanced] = createSignal(false)
 
   const permData = createMemo(() => {
@@ -100,82 +121,75 @@ export const AgentDetail: Component<AgentDetailProps> = (props) => {
   })
 
   return (
-    <div class="flex flex-col h-full min-h-0">
-      {/* Tab bar */}
-      <div class="shrink-0 flex items-center gap-1 px-5 pt-3 border-b border-[var(--v2-border-border-base)]">
-        <TabBtn active={tab() === "overview"} onClick={() => setTab("overview")}>概览</TabBtn>
-        <TabBtn active={tab() === "permissions"} onClick={() => setTab("permissions")}>权限</TabBtn>
-        <TabBtn active={tab() === "prompt"} onClick={() => setTab("prompt")}>系统提示词</TabBtn>
-      </div>
-
-      <div class="flex-1 min-h-0 overflow-y-auto px-5 py-4">
-        <Show when={props.agent} fallback={
-          <div class="flex items-center justify-center py-16 text-[13px] text-[var(--v2-text-text-muted)]">
+    <div class="flex h-full min-w-0 flex-1 flex-col">
+      <Show
+        when={props.agent}
+        fallback={
+          <div class="flex flex-1 items-center justify-center text-[13px] text-[var(--v2-text-text-muted)]">
             选择一个智能体查看详情
           </div>
-        }>
+        }
+      >
+        <div class="shrink-0 border-b border-[var(--v2-border-border-base)] px-6 py-4">
           {/* ── Header ── */}
-          <div class="flex items-start justify-between gap-3 mb-4">
-            <div class="flex flex-col gap-1 min-w-0">
-              <h2 class="text-[16px] font-[530] text-[var(--v2-text-text-base)]">{props.agent!.name}</h2>
-              <div class="flex items-center gap-2 flex-wrap">
-                <span class="text-[12px] text-[var(--v2-text-text-muted)]">
-                  {SOURCE_LABELS[props.source]} · {MODE_LABELS[props.agent!.mode] ?? props.agent!.mode}
-                </span>
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <div class="flex min-w-0 items-center gap-2">
+                <h2 class="truncate text-[18px] font-[530] text-[var(--v2-text-text-base)]">{props.agent!.name}</h2>
+                <SourceBadge source={props.source} />
                 <Show when={props.agent!.hidden}>
-                  <span class="text-[10px] px-1.5 py-px rounded-[3px] bg-[var(--v2-amber-400)]/10 text-[var(--v2-amber-500)]">隐藏</span>
+                  <span class="shrink-0 rounded-[3px] bg-[var(--v2-amber-400)]/10 px-1.5 py-px text-[10px] text-[var(--v2-amber-500)]">隐藏</span>
                 </Show>
               </div>
+              <p class="mt-1 truncate text-[12px] text-[var(--v2-text-text-muted)]">
+                {MODE_LABELS[props.agent!.mode] ?? props.agent!.mode}
+                <span class="mx-1 text-[var(--v2-text-text-faint)]">·</span>
+                {props.agent!.model ? `${props.agent!.model.providerID}/${props.agent!.model.modelID}` : "默认模型"}
+              </p>
             </div>
-            <div class="flex items-center gap-1 shrink-0">
+            <div class="flex shrink-0 items-center" style="gap: 1rem">
               <Show when={isBuiltin()}>
-                <Button variant="ghost" size="small" icon="open-file" onClick={props.onDuplicate}>复制为自定义</Button>
+                <button type="button" class={secondaryButton()} onClick={props.onDuplicate}>复制为自定义</button>
               </Show>
               <Show when={!isBuiltin()}>
-                <Button variant="ghost" size="small" icon="pencil-line" onClick={props.onEdit}>编辑</Button>
-                <Button variant="ghost" size="small" icon="circle-x" onClick={props.onDelete}>删除</Button>
+                <button type="button" class={secondaryButton()} onClick={props.onEdit}>编辑</button>
+                <button type="button" class={dangerButton()} onClick={props.onDelete}>删除</button>
               </Show>
             </div>
           </div>
+        </div>
 
+        <div class="min-h-0 flex-1 overflow-y-auto px-6 py-5">
           <Show when={isBuiltin()}>
-            <div class="text-[12px] text-[var(--v2-text-text-muted)] px-3 py-2 rounded-[6px] bg-[var(--v2-background-bg-layer-01)] border border-[var(--v2-border-border-base)] mb-4">
+            <div class="mb-4 rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-3 py-2 text-[12px] text-[var(--v2-text-text-muted)]">
               内置智能体不可直接编辑，可使用「复制为自定义」创建副本后进行自定义。
             </div>
           </Show>
 
-          {/* ── Tab: 概览 ── */}
-          <Show when={tab() === "overview"}>
-            <div class="flex flex-col gap-3">
-              <Card title="基本信息">
-                <Row label="名称" value={props.agent!.name} />
-                <Row label="来源" value={SOURCE_LABELS[props.source]} />
-                <Row label="类型" value={MODE_LABELS[props.agent!.mode] ?? props.agent!.mode} />
-                <Show when={props.directory}>
-                  <Row label="项目路径" value={props.directory} mono />
-                </Show>
-              </Card>
-
-              <Card title="配置">
-                <Row label="模型" value={props.agent!.model ? `${props.agent!.model.providerID}/${props.agent!.model.modelID}` : "默认"} mono />
-                <Row label="温度" value={props.agent!.temperature?.toString() ?? "默认"} />
-                <Row label="颜色" value={props.agent!.color ?? "默认"} />
-                <Row label="是否隐藏" value={props.agent!.hidden ? "是" : "否"} />
-                <Row label="步骤" value={props.agent!.steps?.toString() ?? "默认"} />
-              </Card>
-
-              <Show when={props.agent!.description}>
-                <Card title="描述">
-                  <p class="text-[13px] text-[var(--v2-text-text-base)] leading-relaxed whitespace-pre-wrap">{props.agent!.description}</p>
+          <div class="flex flex-col gap-5">
+            <section>
+              <h3 class="mb-2 text-[12px] font-[530] uppercase tracking-0 text-[var(--v2-text-text-muted)]">概览</h3>
+              <div class="grid gap-3 lg:grid-cols-2">
+                <Card title="运行设置">
+                  <Row label="温度" value={props.agent!.temperature?.toString() ?? "默认"} />
+                  <Row label="颜色" value={props.agent!.color ?? "默认"} />
+                  <Row label="步骤" value={props.agent!.steps?.toString() ?? "默认"} />
+                  <Show when={props.directory}>
+                    <Row label="项目路径" value={props.directory} mono />
+                  </Show>
                 </Card>
-              </Show>
+                <Show when={props.agent!.description}>
+                  <Card title="描述">
+                    <p class="whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--v2-text-text-base)]">
+                      {props.agent!.description}
+                    </p>
+                  </Card>
+                </Show>
+              </div>
+            </section>
 
-            </div>
-          </Show>
-
-          {/* ── Tab: 权限 ── */}
-          <Show when={tab() === "permissions"}>
-            <div class="flex flex-col gap-3">
+            <section>
+              <h3 class="mb-2 text-[12px] font-[530] uppercase tracking-0 text-[var(--v2-text-text-muted)]">权限</h3>
               <Show when={isBuiltin()} fallback={
                 <>
                   {/* Declared / effective permissions */}
@@ -235,7 +249,12 @@ export const AgentDetail: Component<AgentDetailProps> = (props) => {
                                     <tr class="border-b border-[var(--v2-border-border-base)]/30 last:border-0">
                                       <td class="py-1 pl-2 pr-3 font-mono text-[var(--v2-text-text-base)]">{rule.action}</td>
                                       <td class="py-1 pr-2"><ActionBadge effect={rule.effect ?? "default"} /></td>
-                                      <td class="py-1 pr-2 font-mono text-[var(--v2-text-text-faint)] text-[11px] truncate max-w-[200px]" title={rule.resource}>{rule.resource}</td>
+                                      <td
+                                        class="max-w-[200px] truncate py-1 pr-2 font-mono text-[11px] text-[var(--v2-text-text-faint)]"
+                                        title={rule.resource}
+                                      >
+                                        {rule.resource}
+                                      </td>
                                     </tr>
                                   )}
                                 </For>
@@ -262,23 +281,28 @@ export const AgentDetail: Component<AgentDetailProps> = (props) => {
                   </div>
                 </Card>
               </Show>
-            </div>
-          </Show>
+            </section>
 
-          {/* ── Tab: 系统提示词 ── */}
-          <Show when={tab() === "prompt"}>
-            <Show when={props.agent!.prompt} fallback={
-              <p class="text-[13px] text-[var(--v2-text-text-muted)] py-8 text-center">此智能体无系统提示词。</p>
-            }>
-              <Card title="系统提示词">
-                <div class="max-h-[400px] overflow-y-auto" style="scrollbar-gutter: stable">
-                  <pre class="text-[12px] whitespace-pre-wrap leading-relaxed font-mono text-[var(--v2-text-text-base)] pr-5">{props.agent!.prompt}</pre>
-                </div>
+            <section>
+              <h3 class="mb-2 text-[12px] font-[530] uppercase tracking-0 text-[var(--v2-text-text-muted)]">系统提示词</h3>
+              <Card>
+                <Show
+                  when={props.agent!.prompt}
+                  fallback={<p class="py-6 text-center text-[13px] text-[var(--v2-text-text-muted)]">此智能体无系统提示词。</p>}
+                >
+                  <div class="max-h-[520px] overflow-y-auto pr-2" style="scrollbar-gutter: stable">
+                    <Markdown
+                      text={props.agent!.prompt || " "}
+                      cacheKey={`agent-prompt-preview:${props.agent!.name}:${props.agent!.prompt ?? ""}`}
+                      class="text-[13px] leading-relaxed text-[var(--v2-text-text-base)]"
+                    />
+                  </div>
+                </Show>
               </Card>
-            </Show>
-          </Show>
-        </Show>
-      </div>
+            </section>
+          </div>
+        </div>
+      </Show>
     </div>
   )
 }

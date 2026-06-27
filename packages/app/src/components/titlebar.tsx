@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createResource, createSignal, Match, Show, Switch, untrack } from "solid-js"
 import { createStore } from "solid-js/store"
-import { useLocation, useNavigate, useParams } from "@solidjs/router"
+import { A, useLocation, useNavigate, useParams, useSearchParams } from "@solidjs/router"
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Icon } from "@opencode-ai/ui/icon"
 import { Button } from "@opencode-ai/ui/button"
@@ -27,6 +27,9 @@ import { ServerConnection, useServer } from "@/context/server"
 import { tabKey, useTabs } from "@/context/tabs"
 import "./titlebar.css"
 import { newTabTooltipKeybind } from "./command-tooltip-keybind"
+import { ServerStatusPopover, StatusPopover, StatusPopoverV2 } from "./status-popover"
+import { SDKProvider } from "@/context/sdk"
+import { decode64 } from "@/utils/base64"
 
 type TauriDesktopWindow = {
   startDragging?: () => Promise<void>
@@ -71,6 +74,7 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
   const navigate = useNavigate()
   const location = useLocation()
   const params = useParams()
+  const [searchParams] = useSearchParams<{ project?: string }>()
   const useV2Titlebar = createMemo(() => settings.general.newLayoutDesigns())
   const mobile = createMediaQuery("(max-width: 767px)")
   const bottom = createMemo(() => useV2Titlebar() && mobile() && settings.general.mobileTitlebarPosition() === "bottom")
@@ -119,6 +123,20 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
   const canForward = createMemo(() => history.index < history.stack.length - 1)
   const hasProjects = createMemo(() => layout.projects.list().length > 0)
   const nav = createMemo(() => (useV2Titlebar() ? settings.general.showNavigation() : true))
+  const workflowRoute = createMemo(() =>
+    ["/skills", "/agents", "/requirements", "/design", "/development", "/test"].includes(location.pathname),
+  )
+  const statusDirectory = createMemo(() => searchParams.project || decode64(params.dir))
+  const skillsHref = createMemo(() => {
+    const directory = statusDirectory()
+    if (!directory) return "/skills"
+    return `/skills?project=${encodeURIComponent(directory)}`
+  })
+  const agentsHref = createMemo(() => {
+    const directory = statusDirectory()
+    if (!directory) return "/agents"
+    return `/agents?project=${encodeURIComponent(directory)}`
+  })
   const updateState = createMemo<TitlebarUpdatePillState>(() => {
     const installing = props.update?.installing() ?? false
     const version = props.update?.version()
@@ -133,6 +151,28 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
   })
   const v2RightState = createMemo<TitlebarV2RightState>(() => ({
     update: updateState(),
+    status: {
+      visible: !location.pathname.includes("/session"),
+      label: language.t("status.popover.trigger"),
+      directory: statusDirectory(),
+    },
+    sidebar: {
+      visible: !location.pathname.includes("/session") && !workflowRoute(),
+      label: language.t("command.sidebar.toggle"),
+      keybind: command.keybindParts("sidebar.toggle"),
+      opened: layout.sidebar.opened(),
+      onToggle: layout.sidebar.toggle,
+    },
+    skills: {
+      active: location.pathname === "/skills",
+      label: "技能",
+      onOpen: () => navigate(skillsHref()),
+    },
+    agents: {
+      active: location.pathname === "/agents",
+      label: language.t("agents.title"),
+      onOpen: () => navigate(agentsHref()),
+    },
   }))
 
   const back = () => {
@@ -630,13 +670,61 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
 
             <div
               classList={{
-                "flex items-center min-w-0 justify-end": true,
+                "flex items-center gap-2 min-w-0 justify-end": true,
                 "pr-2": !windows(),
               }}
               data-tauri-drag-region
               onMouseDown={drag}
             >
-              <div id="opencode-titlebar-right" class="flex items-center gap-1 shrink-0 justify-end" />
+              <Tooltip placement="bottom" value="技能" openDelay={2000}>
+                <A
+                  href={skillsHref()}
+                  data-component="button"
+                  data-variant="ghost"
+                  data-size="normal"
+                  class="titlebar-icon w-8 h-6 p-0 box-border shrink-0"
+                  aria-label="技能"
+                  aria-current={location.pathname === "/skills" ? "page" : undefined}
+                >
+                  <Icon size="small" name="mcp" />
+                </A>
+              </Tooltip>
+              <Tooltip placement="bottom" value={language.t("agents.title")} openDelay={2000}>
+                <A
+                  href={agentsHref()}
+                  data-component="button"
+                  data-variant="ghost"
+                  data-size="normal"
+                  class="titlebar-icon w-8 h-6 p-0 box-border shrink-0"
+                  aria-label={language.t("agents.title")}
+                  aria-current={location.pathname === "/agents" ? "page" : undefined}
+                >
+                  <Icon size="small" name="models" />
+                </A>
+              </Tooltip>
+              <Show when={!location.pathname.includes("/session")}>
+                <Tooltip placement="bottom" value={language.t("status.popover.trigger")}>
+                  <TitlebarStatusPopover directory={statusDirectory()} />
+                </Tooltip>
+              </Show>
+              <Show when={!location.pathname.includes("/session") && !workflowRoute()}>
+                <TooltipKeybind
+                  title={language.t("command.sidebar.toggle")}
+                  keybind={command.keybind("sidebar.toggle")}
+                  openDelay={2000}
+                >
+                  <Button
+                    variant="ghost"
+                    class="titlebar-icon w-8 h-6 p-0 box-border shrink-0"
+                    onClick={layout.sidebar.toggle}
+                    aria-label={language.t("command.sidebar.toggle")}
+                    aria-expanded={layout.sidebar.opened()}
+                  >
+                    <Icon size="small" name={layout.sidebar.opened() ? "sidebar-active" : "sidebar"} />
+                  </Button>
+                </TooltipKeybind>
+              </Show>
+              <div id="opencode-titlebar-right" class="flex items-center gap-2 shrink-0 justify-end" />
               <Show when={windows()}>
                 {!tauriApi() && <div class="shrink-0" style={{ width: windowsControlsWidth() }} />}
                 <div data-tauri-decorum-tb class="flex flex-row" />
@@ -660,16 +748,103 @@ type TitlebarUpdatePillState = {
 
 type TitlebarV2RightState = {
   update: TitlebarUpdatePillState
+  status: {
+    visible: boolean
+    label: string
+    directory?: string
+  }
+  sidebar: {
+    visible: boolean
+    label: string
+    keybind: string[]
+    opened: boolean
+    onToggle: () => void
+  }
+  skills: {
+    active: boolean
+    label: string
+    onOpen: () => void
+  }
+  agents: {
+    active: boolean
+    label: string
+    onOpen: () => void
+  }
 }
 
 function TitlebarV2Right(props: { state: TitlebarV2RightState }) {
   return (
-    <div class="relative z-20 flex shrink-0 items-center justify-end gap-0 overflow-visible">
+    <div class="relative z-20 flex shrink-0 items-center justify-end gap-2 overflow-visible">
       <Show when={props.state.update.visible}>
         <TitlebarUpdateIconButton state={props.state.update} />
       </Show>
-      <div id="opencode-titlebar-right" class="flex shrink-0 items-center justify-end gap-0" />
+      <TooltipV2 placement="bottom" value={props.state.skills.label}>
+        <IconButtonV2
+          type="button"
+          variant="ghost-muted"
+          size="large"
+          class="!w-9 shrink-0"
+          state={props.state.skills.active ? "pressed" : undefined}
+          icon={<IconV2 name="mcp" />}
+          onClick={props.state.skills.onOpen}
+          aria-label={props.state.skills.label}
+          aria-current={props.state.skills.active ? "page" : undefined}
+        />
+      </TooltipV2>
+      <TooltipV2 placement="bottom" value={props.state.agents.label}>
+        <IconButtonV2
+          type="button"
+          variant="ghost-muted"
+          size="large"
+          class="!w-9 shrink-0"
+          state={props.state.agents.active ? "pressed" : undefined}
+          icon={<IconV2 name="models" />}
+          onClick={props.state.agents.onOpen}
+          aria-label={props.state.agents.label}
+          aria-current={props.state.agents.active ? "page" : undefined}
+        />
+      </TooltipV2>
+      <Show when={props.state.status.visible}>
+        <TooltipV2 placement="bottom" value={props.state.status.label}>
+          <TitlebarStatusPopover directory={props.state.status.directory} v2 />
+        </TooltipV2>
+      </Show>
+      <Show when={props.state.sidebar.visible}>
+        <TooltipV2
+          placement="bottom"
+          value={
+            <>
+              {props.state.sidebar.label}
+              <Show when={props.state.sidebar.keybind.length > 0}>
+                <KeybindV2 keys={props.state.sidebar.keybind} variant="neutral" />
+              </Show>
+            </>
+          }
+        >
+          <IconButtonV2
+            type="button"
+            variant="ghost-muted"
+            size="large"
+            class="!w-9 shrink-0"
+            state={props.state.sidebar.opened ? "pressed" : undefined}
+            icon={<IconV2 name="sidebar-right" />}
+            onClick={props.state.sidebar.onToggle}
+            aria-label={props.state.sidebar.label}
+            aria-expanded={props.state.sidebar.opened}
+          />
+        </TooltipV2>
+      </Show>
+      <div id="opencode-titlebar-right" class="flex shrink-0 items-center justify-end gap-2" />
     </div>
+  )
+}
+
+function TitlebarStatusPopover(props: { directory?: string; v2?: boolean }) {
+  if (!props.directory) return props.v2 ? <StatusPopoverV2 scope="server" /> : <ServerStatusPopover />
+  return (
+    <SDKProvider directory={props.directory}>
+      {props.v2 ? <StatusPopoverV2 /> : <StatusPopover />}
+    </SDKProvider>
   )
 }
 

@@ -40,6 +40,43 @@ export class ApiVcsApplyError extends Schema.ErrorClass<ApiVcsApplyError>("VcsAp
   { httpApiStatus: 400 },
 ) {}
 
+export const SkillFileQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  location: Schema.String,
+})
+
+export const SkillFileResult = Schema.Struct({
+  content: Schema.String,
+  editable: Schema.Boolean,
+})
+
+export const SkillCreatePayload = Schema.Struct({
+  name: Schema.String,
+  description: Schema.optional(Schema.String),
+  source: Schema.Literals(["project", "global"]),
+  content: Schema.String,
+})
+
+export const SkillWritePayload = Schema.Struct({
+  location: Schema.String,
+  content: Schema.String,
+})
+
+export const SkillDeletePayload = Schema.Struct({
+  location: Schema.String,
+})
+
+export class ApiSkillManageError extends Schema.ErrorClass<ApiSkillManageError>("SkillManageError")(
+  {
+    name: Schema.Literal("SkillManageError"),
+    data: Schema.Struct({
+      message: Schema.String,
+      reason: Schema.Literals(["conflict", "invalid", "missing", "readonly"]),
+    }),
+  },
+  { httpApiStatus: 400 },
+) {}
+
 export const InstancePaths = {
   dispose: "/instance/dispose",
   path: "/path",
@@ -51,6 +88,7 @@ export const InstancePaths = {
   command: "/command",
   agent: "/agent",
   skill: "/skill",
+  skillFile: "/skill/file",
   lsp: "/lsp",
   formatter: "/formatter",
 } as const
@@ -164,6 +202,53 @@ export const InstanceApi = HttpApi.make("instance")
             identifier: "app.skills",
             summary: "List skills",
             description: "Get a list of all available skills in the OpenCode system.",
+          }),
+        ),
+        HttpApiEndpoint.get("skillFile", InstancePaths.skillFile, {
+          query: SkillFileQuery,
+          success: described(SkillFileResult, "Skill markdown document"),
+          error: ApiSkillManageError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "app.skillFile",
+            summary: "Read skill document",
+            description: "Read the raw SKILL.md content for an available skill.",
+          }),
+        ),
+        HttpApiEndpoint.post("skillCreate", InstancePaths.skill, {
+          query: WorkspaceRoutingQuery,
+          payload: SkillCreatePayload,
+          success: described(Skill.Info, "Created skill"),
+          error: ApiSkillManageError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "app.skillCreate",
+            summary: "Create skill",
+            description: "Create a new project or global skill.",
+          }),
+        ),
+        HttpApiEndpoint.patch("skillUpdate", InstancePaths.skill, {
+          query: WorkspaceRoutingQuery,
+          payload: SkillWritePayload,
+          success: described(Skill.Info, "Updated skill"),
+          error: ApiSkillManageError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "app.skillUpdate",
+            summary: "Update skill",
+            description: "Update the raw SKILL.md content for an available skill.",
+          }),
+        ),
+        HttpApiEndpoint.delete("skillDelete", InstancePaths.skill, {
+          query: WorkspaceRoutingQuery,
+          payload: SkillDeletePayload,
+          success: described(Schema.Boolean, "Deleted skill"),
+          error: ApiSkillManageError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "app.skillDelete",
+            summary: "Delete skill",
+            description: "Delete an available disk-backed skill.",
           }),
         ),
         HttpApiEndpoint.get("lsp", InstancePaths.lsp, {

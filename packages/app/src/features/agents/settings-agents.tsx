@@ -47,14 +47,16 @@ const AgentsContent = () => {
   const [selectedId, setSelectedId] = createSignal<string | null>(null)
   const [search, setSearch] = createSignal("")
   const [sourceFilter, setSourceFilter] = createSignal<AgentSource | "all">("all")
+  const [mode, setMode] = createSignal<"view" | "create" | "edit">("view")
+  const [editorInitialData, setEditorInitialData] = createSignal<Partial<AgentFormData> | undefined>()
 
-  // Requirements keeps the active project in the query string because it has no directory route segment.
+  // Workflow pages keep the active project in the query string because they have no directory route segment.
   const directory = createMemo(() => {
     if (params.dir) return decode64(params.dir) ?? ""
     return searchParams.project ?? ""
   })
 
-  const hasProject = () => directory().length > 0
+  const hasProject = () => (directory() ?? "").length > 0
 
   const serverAuth = (): ServerAuth => {
     const conn = server.current
@@ -78,14 +80,57 @@ const AgentsContent = () => {
     async (svc) => svc.listAgents(),
   )
 
-  const agents = () => data()?.agents ?? []
-  const sources = () => data()?.sources ?? new Map<string, AgentSource>()
+  createEffect(() => {
+    if (hasProject()) return
+    if (sourceFilter() === "project") setSourceFilter("all")
+  })
 
-  const selectedAgent = () => {
-    const id = selectedId()
-    if (!id) return null
-    return agents().find((a) => a.name === id) ?? null
+  const agents = () => {
+    const val = data()
+    if (!val || !Array.isArray(val.agents)) return []
+    return val.agents
   }
+  const sources = () => {
+    const val = data()
+    if (!val || !(val.sources instanceof Map)) return new Map<string, AgentSource>()
+    return val.sources
+  }
+  const agentSource = (agentName: string): AgentSource => {
+    if (isBuiltinAgent(agentName)) return "built-in"
+    return sources().get(agentName) ?? "project"
+  }
+  const sourceOrder: Record<AgentSource, number> = {
+    project: 0,
+    global: 1,
+    "built-in": 2,
+  }
+  const orderedAgents = createMemo(() =>
+    agents()
+      .slice()
+      .sort((a, b) => sourceOrder[agentSource(a.name)] - sourceOrder[agentSource(b.name)] || a.name.localeCompare(b.name)),
+  )
+  const counts = createMemo(() => {
+    const list = agents()
+    return {
+      all: list.length,
+      "built-in": list.filter((agent) => isBuiltinAgent(agent.name)).length,
+      project: list.filter((agent) => !isBuiltinAgent(agent.name) && (sources().get(agent.name) ?? "project") === "project").length,
+      global: list.filter((agent) => !isBuiltinAgent(agent.name) && sources().get(agent.name) === "global").length,
+    }
+  })
+
+  createEffect(() => {
+    if (mode() !== "view") return
+    const current = selectedId()
+    const list = orderedAgents()
+    if (current && list.some((agent) => agent.name === current)) return
+    setSelectedId(list[0]?.name ?? null)
+  })
+
+  const selectedAgent = createMemo(() => {
+    const id = selectedId()
+    return (id ? agents().find((agent) => agent.name === id) : undefined) ?? orderedAgents()[0] ?? null
+  })
 
   const selectedSource = (): AgentSource => {
     const agent = selectedAgent()
@@ -99,7 +144,7 @@ const AgentsContent = () => {
     if (!svc) return
     await svc.disposeInstance()
     await queryClient.refetchQueries({
-      queryKey: [serverSDK().scope, pathKey(directory()), "agents"],
+      queryKey: [serverSDK().scope, pathKey(directory() ?? ""), "agents"],
       exact: true,
     })
     await refetch()
@@ -118,19 +163,13 @@ const AgentsContent = () => {
   // ── Handlers ─────────────────────────────────────────────────────────────
 
   const handleNew = () => {
-    const projDir = directory()
-    dialogFn.push(() => (
-      <AgentEditor
-        title="新建智能体"
-        projectDir={projDir}
-        hasProject={hasProject()}
-        createAsSubagent
-        onSave={async (formData) => {
-          dialogFn.close()
-          await handleSave(formData, "create")
-        }}
-      />
-    ))
+    setSelectedId(null)
+    setEditorInitialData(undefined)
+    setMode("create")
+  }
+
+  const cancelEdit = () => {
+    setMode("view")
   }
 
   const handleEdit = async (id: string) => {
@@ -158,20 +197,8 @@ const AgentsContent = () => {
           action === "allow" || action === "ask" || action === "deny" ? [{ tool, action }] : [],
         )
       }
-      dialogFn.push(() => (
-        <AgentEditor
-          title="编辑智能体"
-          initialData={formData}
-          hideLocation
-          nameLocked
-          projectDir={directory()}
-          hasProject={hasProject()}
-          onSave={async (fd) => {
-            dialogFn.close()
-            await handleSave(fd, "edit")
-          }}
-        />
-      ))
+      setEditorInitialData(formData)
+      setMode("edit")
     } catch (err) {
       showToast({
         variant: "error",
@@ -196,18 +223,9 @@ const AgentsContent = () => {
       disable: false,
       prompt: agent.prompt || "",
     }
-    dialogFn.push(() => (
-      <AgentEditor
-        title="复制为自定义智能体"
-        initialData={formData}
-        projectDir={directory()}
-        hasProject={hasProject()}
-        onSave={async (fd) => {
-          dialogFn.close()
-          await handleSave(fd, "create")
-        }}
-      />
-    ))
+    setSelectedId(null)
+    setEditorInitialData(formData)
+    setMode("create")
   }
 
   const handleSave = async (formData: AgentFormData, mode: "create" | "edit") => {
@@ -225,6 +243,9 @@ const AgentsContent = () => {
     }
 
     const synced = await refreshAfterMutation()
+    setSelectedId(formData.name)
+    setEditorInitialData(undefined)
+    setMode("view")
     showToast({
       variant: synced ? "success" : "error",
       title: synced ? (mode === "create" ? "创建成功" : "更新成功") : "已保存，但同步失败",
@@ -264,81 +285,92 @@ const AgentsContent = () => {
     }
   }
 
-  // ── Project display helpers ──────────────────────────────────────────────
-
-  const projectName = () => {
-    const d = directory()
-    if (!d) return ""
-    return d.split("/").pop() || d
-  }
-
-  const projectAgentPath = () => (directory() ? `${directory()}/.opencode/agents` : "")
-  const globalAgentPath = () => "~/.config/opencode/agents"
-
   // ── Render ─────────────────────────────────────────────────────────────
 
   return (
-    <div class="flex flex-col h-full min-h-0 w-full">
+    <div class="flex h-full min-h-0 w-full flex-col">
       {/* Title + project context */}
-      <div class="shrink-0 flex items-center justify-between gap-4 px-5 pt-4 pb-3">
-        <h1 class="text-[16px] font-[530] text-[var(--v2-text-text-base)] shrink-0">{language.t("agents.title")}</h1>
-        <Show
-          when={hasProject()}
-          fallback={
-            <p class="text-[12px] text-[var(--v2-text-text-muted)] truncate">
-              当前未打开项目，仅展示内置与全局智能体。
-            </p>
-          }
-        >
-          <p class="text-[12px] text-[var(--v2-text-text-muted)] truncate max-w-[480px]" title={directory()}>
-            当前项目：<span class="text-[var(--v2-text-text-base)]">{projectName()}</span>
-            <span class="text-[var(--v2-text-text-faint)] ml-1">· {directory()}</span>
-          </p>
-        </Show>
+      <div class="shrink-0 border-b border-[var(--v2-border-border-base)] px-5 pb-3 pt-4">
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0">
+            <h1 class="text-[16px] font-[530] leading-8 text-[var(--v2-text-text-base)]">{language.t("agents.title")}</h1>
+          </div>
+          <button
+            type="button"
+            onClick={handleNew}
+            class="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-3 text-[12px] font-[530] text-[var(--v2-text-text-base)] transition-colors hover:bg-[var(--v2-background-bg-layer-02)]"
+          >
+            新建智能体
+          </button>
+        </div>
       </div>
 
       {/* Body */}
-      <div class="flex-1 min-h-0 flex mt-2">
-        {/* Left: list */}
-        <div class="h-full min-h-0 w-full max-w-[270px] shrink-0 border-r border-[var(--v2-border-border-base)]">
+      <div class="flex min-h-0 flex-1">
+        {/* Left: list — hidden during create to give editor full width */}
+        <div
+          class="flex h-full w-full shrink-0 flex-col border-r border-[var(--v2-border-border-base)] md:w-[360px] md:max-w-[360px]"
+          classList={{ hidden: mode() === "create" }}
+        >
           <AgentList
             agents={agents()}
             sources={sources()}
-            selectedId={selectedId()}
+            counts={counts()}
+            selectedId={selectedId() ?? selectedAgent()?.name ?? null}
             loading={data.loading}
             error={data.error ? String(data.error) : null}
             search={search()}
             sourceFilter={sourceFilter()}
+            hasProject={hasProject()}
             onSearchChange={setSearch}
             onSourceFilterChange={setSourceFilter}
-            onSelect={setSelectedId}
-            onNew={handleNew}
+            onSelect={(id) => {
+              setMode("view")
+              setEditorInitialData(undefined)
+              setSelectedId(id)
+            }}
             onRefresh={refetch}
-            onEdit={handleEdit}
-            onDelete={handleDeleteClick}
-            onDuplicate={handleDuplicate}
           />
         </div>
 
         {/* Right: detail */}
-        <Show when={selectedId()}>
-          <div class="flex-1 min-h-0 min-w-0">
-            <AgentDetail
-              agent={selectedAgent()}
-              source={selectedSource()}
-              directory={directory()}
-              onEdit={() => handleEdit(selectedId()!)}
-              onDelete={() => handleDeleteClick(selectedId()!)}
-              onDuplicate={() => handleDuplicate(selectedId()!)}
+        <div class="flex min-h-0 min-w-0 flex-1">
+          <Show
+            when={mode() === "create" || mode() === "edit"}
+            fallback={
+              <Show
+                when={selectedAgent()}
+                fallback={
+                  <div class="hidden h-full min-h-0 flex-1 items-center justify-center md:flex">
+                    <span class="text-[13px] text-[var(--v2-text-text-muted)]">选择一个智能体查看详情</span>
+                  </div>
+                }
+              >
+                <AgentDetail
+                  agent={selectedAgent()}
+                  source={selectedSource()}
+                  directory={directory()}
+                  onEdit={() => selectedAgent() && handleEdit(selectedAgent()!.name)}
+                  onDelete={() => selectedAgent() && handleDeleteClick(selectedAgent()!.name)}
+                  onDuplicate={() => selectedAgent() && handleDuplicate(selectedAgent()!.name)}
+                />
+              </Show>
+            }
+          >
+            <AgentEditor
+              title={mode() === "edit" ? "编辑智能体" : editorInitialData()?.name ? "复制为自定义智能体" : "新建智能体"}
+              initialData={editorInitialData()}
+              hideLocation={mode() === "edit"}
+              nameLocked={mode() === "edit"}
+              projectDir={directory()}
+              hasProject={hasProject()}
+              createAsSubagent={mode() === "create" && !editorInitialData()}
+              variant="inline"
+              onCancel={cancelEdit}
+              onSave={(formData) => handleSave(formData, mode() === "edit" ? "edit" : "create")}
             />
-          </div>
-        </Show>
-
-        <Show when={!selectedId()}>
-          <div class="flex-1 hidden xl:flex items-center justify-center min-h-0">
-            <span class="text-[13px] text-[var(--v2-text-text-muted)]">选择一个智能体查看详情</span>
-          </div>
-        </Show>
+          </Show>
+        </div>
       </div>
     </div>
   )

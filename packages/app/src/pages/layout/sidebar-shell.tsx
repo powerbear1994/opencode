@@ -100,7 +100,7 @@ export const SidebarContent = (props: {
         <div class="shrink-0 w-full pt-3 pb-6 flex flex-col items-center gap-2">
           <Tooltip placement={placement()} value={props.requirementsLabel()}>
             <IconButton
-              icon="bullet-list"
+              icon="checklist"
               variant="ghost"
               size="large"
               onClick={props.onOpenRequirements}
@@ -109,7 +109,7 @@ export const SidebarContent = (props: {
           </Tooltip>
           <Tooltip placement={placement()} value={props.designLabel()}>
             <IconButton
-              icon="edit"
+              icon="review"
               variant="ghost"
               size="large"
               onClick={props.onOpenDesign}
@@ -118,7 +118,7 @@ export const SidebarContent = (props: {
           </Tooltip>
           <Tooltip placement={placement()} value={props.developmentLabel()}>
             <IconButton
-              icon="terminal"
+              icon="code"
               variant="ghost"
               size="large"
               onClick={props.onOpenDevelopment}
@@ -127,7 +127,7 @@ export const SidebarContent = (props: {
           </Tooltip>
           <Tooltip placement={placement()} value={props.testLabel()}>
             <IconButton
-              icon="status"
+              icon="shield"
               variant="ghost"
               size="large"
               onClick={props.onOpenTest}

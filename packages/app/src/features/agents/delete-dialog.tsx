@@ -28,9 +28,14 @@ export const DeleteAgentDialog: Component<DeleteDialogProps> = (props) => {
         <Button variant="ghost" size="small" onClick={() => dialog.close()} disabled={props.loading}>
           取消
         </Button>
-        <Button variant="primary" size="small" onClick={props.onConfirm} disabled={props.loading}>
+        <button
+          type="button"
+          onClick={props.onConfirm}
+          disabled={props.loading}
+          class="inline-flex h-8 items-center rounded-[6px] border border-[var(--v2-red-400)]/40 bg-[var(--v2-red-400)]/10 px-3 text-[12px] font-[530] text-[var(--v2-red-600)] transition-colors hover:bg-[var(--v2-red-400)]/15 disabled:cursor-not-allowed disabled:opacity-60"
+        >
           {props.loading ? "删除中..." : "确认删除"}
-        </Button>
+        </button>
       </DialogFooter>
     </Dialog>
   )

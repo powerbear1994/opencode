@@ -1,5 +1,6 @@
-import { For, Show, createEffect, createMemo, type Component, type JSX } from "solid-js"
+import { For, Show, createEffect, createMemo, type Component } from "solid-js"
 import { createStore } from "solid-js/store"
+import { Markdown } from "@opencode-ai/session-ui/markdown"
 import { Button } from "@opencode-ai/ui/button"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { TextField } from "@opencode-ai/ui/text-field"
@@ -20,7 +21,9 @@ interface AgentEditorProps {
   projectDir?: string
   hasProject?: boolean
   createAsSubagent?: boolean
+  variant?: "dialog" | "inline"
   onSave: (data: AgentFormData) => void
+  onCancel?: () => void
 }
 
 function defaultFormData(
@@ -28,19 +31,21 @@ function defaultFormData(
   hasProject = true,
   createAsSubagent = false,
 ): AgentFormData {
+  const permissions = PERMISSION_KEYS.map((tool) => ({ tool, action: DEFAULT_PERMISSIONS[tool] }))
+  const form = { ...overrides }
   return {
-    name: "",
-    location: hasProject ? "project" : "global",
-    mode: createAsSubagent ? "subagent" : "all",
-    description: "",
-    model: "",
-    temperature: 0,
-    color: "",
-    hidden: false,
-    disable: false,
-    permissions: PERMISSION_KEYS.map((tool) => ({ tool, action: DEFAULT_PERMISSIONS[tool] })),
-    prompt: "",
-    ...overrides,
+    name: form.name ?? "",
+    ...form,
+    location: form.location ?? (hasProject ? "project" : "global"),
+    mode: form.mode ?? (createAsSubagent ? "subagent" : "all"),
+    description: form.description ?? "",
+    model: form.model ?? "",
+    temperature: form.temperature ?? 0,
+    color: form.color ?? "",
+    hidden: form.hidden ?? false,
+    disable: form.disable ?? false,
+    permissions: form.permissions ?? permissions,
+    prompt: form.prompt ?? "",
     ...(createAsSubagent ? { mode: "subagent" as const } : {}),
   }
 }
@@ -61,27 +66,6 @@ type ModelOption = {
   label: string
   provider: string
 }
-
-const TabButton: Component<{
-  active: boolean
-  onClick: () => void
-  children: JSX.Element
-  hasError?: boolean
-}> = (props) => (
-  <button
-    type="button"
-    role="tab"
-    aria-selected={props.active}
-    onClick={props.onClick}
-    class="agent-editor-tab"
-    data-active={props.active ? "" : undefined}
-  >
-    {props.children}
-    <Show when={props.hasError}>
-      <span class="agent-editor-tab-error" aria-label="包含未填写的必填项" />
-    </Show>
-  </button>
-)
 
 const PermissionRow: Component<{
   tool: PermissionKey
@@ -112,7 +96,6 @@ export const AgentEditor: Component<AgentEditorProps> = (props) => {
   const models = useModels()
   const [state, setState] = createStore({
     form: defaultFormData(props.initialData, props.hasProject, props.createAsSubagent),
-    activeTab: "general" as "general" | "permissions" | "prompt",
     advancedOpen: false,
     modelSelectKey: 0,
   })
@@ -120,15 +103,16 @@ export const AgentEditor: Component<AgentEditorProps> = (props) => {
   createEffect(() => setState("form", defaultFormData(props.initialData, props.hasProject, props.createAsSubagent)))
 
   const update = (next: Partial<AgentFormData>) => setState("form", (form) => ({ ...form, ...next }))
+  const formPermissions = () => state.form.permissions ?? []
   const permission = (tool: PermissionKey) =>
-    state.form.permissions.find((item) => item.tool === tool)?.action ?? DEFAULT_PERMISSIONS[tool]
+    formPermissions().find((item) => item.tool === tool)?.action ?? DEFAULT_PERMISSIONS[tool]
   const setPermission = (tool: PermissionKey, action: PermissionAction) => {
-    const index = state.form.permissions.findIndex((item) => item.tool === tool)
+    const index = formPermissions().findIndex((item) => item.tool === tool)
     if (index >= 0) {
       setState("form", "permissions", index, "action", action)
       return
     }
-    setState("form", "permissions", state.form.permissions.length, { tool, action })
+    setState("form", "permissions", formPermissions().length, { tool, action })
   }
   const modelOptions = createMemo(() => {
     const available = models
@@ -174,52 +158,27 @@ export const AgentEditor: Component<AgentEditorProps> = (props) => {
     update({ model: "" })
     setState("modelSelectKey", (key) => key + 1)
   }
-  const normalizedName = createMemo(() => state.form.name.trim().toLowerCase())
+  const normalizedName = createMemo(() => (state.form.name ?? "").trim().toLowerCase())
   const nameError = createMemo(() => {
-    if (!state.form.name.trim()) return ""
+    if (!(state.form.name ?? "").trim()) return ""
     if (!/^[a-z0-9._-]+$/.test(normalizedName())) return "仅支持字母、数字、点、下划线和连字符。"
     if (BUILTIN_AGENT_NAMES.has(normalizedName())) return "该名称为内置智能体保留名称。"
     return ""
   })
-  const tabMissingRequired = createMemo(() => {
-    const missing: Record<string, boolean> = {}
-    if (!normalizedName() || !!nameError() || !state.form.description.trim()) {
-      missing.general = true
-    }
-    return missing
-  })
-  const valid = createMemo(() => !!normalizedName() && !nameError() && !!state.form.description.trim())
+  const valid = createMemo(() => !!normalizedName() && !nameError() && !!(state.form.description ?? "").trim())
 
   const handleSave = () => {
     if (!valid()) return
     props.onSave(state.form)
   }
 
-  return (
-    <Dialog title={props.title} size="large" class="agent-editor-dialog">
-      <div class="agent-editor-shell">
-        <div class="agent-editor-tabs" role="tablist" aria-label="智能体配置">
-          <TabButton
-            active={state.activeTab === "general"}
-            onClick={() => setState("activeTab", "general")}
-            hasError={tabMissingRequired().general}
-          >
-            基本信息
-          </TabButton>
-          <TabButton active={state.activeTab === "permissions"} onClick={() => setState("activeTab", "permissions")}>
-            权限
-          </TabButton>
-          <TabButton
-            active={state.activeTab === "prompt"}
-            onClick={() => setState("activeTab", "prompt")}
-            hasError={tabMissingRequired().prompt}
-          >
-            提示词
-          </TabButton>
-        </div>
-
+  const content = () => (
+    <div class="agent-editor-shell" data-variant={props.variant ?? "dialog"}>
         <div class="agent-editor-body">
-          <Show when={state.activeTab === "general"}>
+          <section class="mb-5">
+            <h3 class="mb-2 text-[12px] font-[530] uppercase tracking-0 text-[var(--v2-text-text-muted)]">
+              基本信息
+            </h3>
             <div class="agent-editor-form-grid">
               <div class="agent-editor-field-span">
                 <div class="agent-editor-required-label">
@@ -284,7 +243,6 @@ export const AgentEditor: Component<AgentEditorProps> = (props) => {
                   onChange={(description) => update({ description })}
                   placeholder="这个智能体负责什么？"
                   required
-                  description="用于说明该智能体的职责和适用场景。"
                 />
               </div>
 
@@ -372,9 +330,12 @@ export const AgentEditor: Component<AgentEditorProps> = (props) => {
                 </Show>
               </div>
             </div>
-          </Show>
+          </section>
 
-          <Show when={state.activeTab === "permissions"}>
+          <section class="mb-5">
+            <h3 class="mb-2 text-[12px] font-[530] uppercase tracking-0 text-[var(--v2-text-text-muted)]">
+              权限
+            </h3>
             <div class="flex flex-col gap-4">
               <div class="agent-editor-permission-header">
                 <p>配置智能体可使用的工具权限。未显式设置的权限将使用默认值。</p>
@@ -394,32 +355,27 @@ export const AgentEditor: Component<AgentEditorProps> = (props) => {
                 </For>
               </div>
             </div>
-          </Show>
+          </section>
 
-          <Show when={state.activeTab === "prompt"}>
+          <section class="mb-5">
+            <h3 class="mb-2 text-[12px] font-[530] uppercase tracking-0 text-[var(--v2-text-text-muted)]">
+              系统提示词
+            </h3>
             <div class="flex flex-col gap-3">
-              <div>
-                <h3 class="agent-editor-required-label text-13-medium text-text-base">
-                  <span>系统提示词</span>
-                  <span aria-hidden="true">*</span>
-                </h3>
-                <p class="mt-1 text-12-regular text-text-muted">当智能体被调用时，这段文本会作为系统消息发送。</p>
-              </div>
-              <textarea
-                required
+              <MarkdownEditorPreview
                 value={state.form.prompt}
-                onInput={(event) => update({ prompt: event.currentTarget.value })}
-                placeholder="你是一个..."
-                class="agent-editor-prompt"
+                preview={state.form.prompt}
+                cacheKey={`agent-editor-prompt-preview:${state.form.name}:${state.form.prompt}`}
+                onInput={(prompt) => update({ prompt })}
               />
             </div>
-          </Show>
+          </section>
         </div>
 
         <div class="agent-editor-footer">
           <p>保存后需重新打开项目或重启桌面端后生效。</p>
           <div class="flex shrink-0 items-center gap-2">
-            <Button variant="ghost" size="small" onClick={() => dialog.close()} disabled={props.loading}>
+            <Button variant="ghost" size="small" onClick={() => props.onCancel?.() ?? dialog.close()} disabled={props.loading}>
               取消
             </Button>
             <Button variant="primary" size="small" onClick={handleSave} disabled={props.loading || !valid()}>
@@ -428,6 +384,133 @@ export const AgentEditor: Component<AgentEditorProps> = (props) => {
           </div>
         </div>
       </div>
+  )
+
+  if (props.variant === "inline") {
+    return (
+      <div class="flex h-full min-w-0 flex-1 flex-col">
+        <div class="shrink-0 border-b border-[var(--v2-border-border-base)] px-6 py-4">
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <h2 class="truncate text-[18px] font-[530] text-[var(--v2-text-text-base)]">{props.title}</h2>
+            </div>
+            <div class="flex shrink-0 items-center gap-1.5">
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={props.loading || !valid()}
+                class="inline-flex h-8 items-center gap-1.5 rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-3 text-[12px] font-[530] text-[var(--v2-text-text-base)] transition-colors hover:bg-[var(--v2-background-bg-layer-02)] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {props.loading ? "保存中..." : props.nameLocked ? "保存" : "创建"}
+              </button>
+              <button
+                type="button"
+                onClick={() => props.onCancel?.()}
+                disabled={props.loading}
+                class="inline-flex h-8 items-center gap-1.5 rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-3 text-[12px] font-[530] text-[var(--v2-text-text-base)] transition-colors hover:bg-[var(--v2-background-bg-layer-02)] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+        {content()}
+      </div>
+    )
+  }
+
+  return (
+    <Dialog title={props.title} size="large" class="agent-editor-dialog">
+      {content()}
     </Dialog>
+  )
+}
+
+function MarkdownEditorPreview(props: {
+  value: string
+  preview: string
+  cacheKey: string
+  onInput: (value: string) => void
+}) {
+  const [split, setSplit] = createStore({ value: 50 })
+  let containerRef: HTMLDivElement | undefined
+  let editorRef: HTMLTextAreaElement | undefined
+  let previewRef: HTMLDivElement | undefined
+  let syncing = false
+
+  const onEditorScroll = () => {
+    if (syncing || !editorRef || !previewRef) return
+    syncing = true
+    const max = editorRef.scrollHeight - editorRef.clientHeight
+    if (max <= 0) {
+      syncing = false
+      return
+    }
+    previewRef.scrollTop = (editorRef.scrollTop / max) * (previewRef.scrollHeight - previewRef.clientHeight)
+    requestAnimationFrame(() => {
+      syncing = false
+    })
+  }
+
+  const onPreviewScroll = () => {
+    if (syncing || !editorRef || !previewRef) return
+    syncing = true
+    const max = previewRef.scrollHeight - previewRef.clientHeight
+    if (max <= 0) {
+      syncing = false
+      return
+    }
+    editorRef.scrollTop = (previewRef.scrollTop / max) * (editorRef.scrollHeight - editorRef.clientHeight)
+    requestAnimationFrame(() => {
+      syncing = false
+    })
+  }
+
+  const onDividerDown = (e: MouseEvent) => {
+    e.preventDefault()
+    const onMove = (ev: MouseEvent) => {
+      if (!containerRef) return
+      const rect = containerRef.getBoundingClientRect()
+      setSplit("value", Math.max(20, Math.min(80, ((ev.clientX - rect.left) / rect.width) * 100)))
+    }
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove)
+      window.removeEventListener("mouseup", onUp)
+    }
+    window.addEventListener("mousemove", onMove)
+    window.addEventListener("mouseup", onUp)
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      class="flex h-[calc(100vh-370px)] min-h-[320px] overflow-hidden rounded-[7px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)]"
+    >
+      <textarea
+        ref={editorRef}
+        value={props.value}
+        onInput={(event) => props.onInput(event.currentTarget.value)}
+        onScroll={onEditorScroll}
+        spellcheck={false}
+        style={{ width: `${split.value}%` }}
+        class="min-h-0 resize-none border-0 bg-transparent p-4 font-mono text-[12px] leading-5 text-[var(--v2-text-text-base)] outline-none placeholder:text-[var(--v2-text-text-faint)]"
+        placeholder="你是一个..."
+      />
+      <div class="flex shrink-0 cursor-col-resize items-center justify-center py-2" onMouseDown={onDividerDown}>
+        <div class="h-full w-px bg-[var(--v2-border-border-base)]" />
+      </div>
+      <div
+        ref={previewRef}
+        onScroll={onPreviewScroll}
+        style={{ width: `${100 - split.value}%` }}
+        class="min-h-0 min-w-0 overflow-y-auto p-4"
+      >
+        <Markdown
+          text={props.preview || " "}
+          cacheKey={props.cacheKey}
+          class="text-[13px] leading-relaxed text-[var(--v2-text-text-base)]"
+        />
+      </div>
+    </div>
   )
 }
