@@ -7,7 +7,7 @@ import { LSP } from "@/lsp/lsp"
 import { Vcs } from "@/project/vcs"
 import { Skill } from "@/skill"
 import { ConfigMarkdown } from "@opencode-ai/core/config/markdown"
-import { Effect } from "effect"
+import { Effect, Stream } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
 import {
@@ -15,6 +15,7 @@ import {
   ApiVcsApplyError,
   SkillCreatePayload,
   SkillDeletePayload,
+  SkillGeneratePayload,
   SkillWritePayload,
 } from "../groups/instance"
 import { markInstanceForDisposal } from "../lifecycle"
@@ -22,6 +23,10 @@ import { isRecord } from "@/util/record"
 import path from "path"
 import { rm } from "fs/promises"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { LLM } from "@/session/llm"
+import { Provider } from "@/provider/provider"
+import { LLMEvent } from "@opencode-ai/llm"
+import { MessageID, SessionID } from "@/session/schema"
 
 function skillDocument(input: { name: string; description?: string; content: string }) {
   if (parseSkillDocument(input.content)) return input.content
@@ -57,6 +62,15 @@ function parseSkillDocument(content: string) {
   }
 }
 
+function extractMarkdown(text: string) {
+  const trimmed = text.trim()
+  // Try to extract content from markdown code fences
+  const fenceMatch = trimmed.match(/```(?:markdown|md|yaml)?\s*\n([\s\S]*?)\n```/)
+  if (fenceMatch) return fenceMatch[1].trim()
+  // If no code fences, return the raw text (assuming the model output it directly)
+  return trimmed
+}
+
 export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance", (handlers) =>
   Effect.gen(function* () {
     const agent = yield* Agent.Service
@@ -66,6 +80,8 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
     const skill = yield* Skill.Service
     const vcs = yield* Vcs.Service
     const fs = yield* FSUtil.Service
+    const llm = yield* LLM.Service
+    const provider = yield* Provider.Service
 
     const dispose = Effect.fn("InstanceHttpApi.dispose")(function* () {
       yield* markInstanceForDisposal(yield* InstanceState.context)
@@ -244,6 +260,112 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
       return true
     })
 
+    const skillGenerate = Effect.fn("InstanceHttpApi.skillGenerate")(function* (ctx: {
+      payload: typeof SkillGeneratePayload.Type
+    }) {
+      const name = ctx.payload.name.trim()
+      if (!name) return yield* Effect.fail(skillError("invalid", "Skill name is required."))
+
+      const description = ctx.payload.description?.trim() || ""
+
+      const fallback = yield* provider.defaultModel().pipe(
+        Effect.catchCause(() => Effect.succeed(undefined)),
+      )
+      if (!fallback) return yield* Effect.fail(skillError("invalid", "No AI model is configured."))
+
+      const model =
+        (yield* provider.getSmallModel(fallback.providerID)) ??
+        (yield* provider.getModel(fallback.providerID, fallback.modelID).pipe(
+          Effect.catchCause(() =>
+            Effect.fail(skillError("invalid", "Failed to find an available AI model.")),
+          ),
+        ))
+
+      const prompt = [
+        "Write a SKILL.md file for the following skill. Output ONLY the file content, nothing else.",
+        "",
+        `Skill name: ${name}`,
+        description ? `What it does: ${description}` : "",
+        "",
+        "Rules:",
+        "- Do NOT search for existing files, examples, or references.",
+        "- Do NOT use any tools.",
+        "- Do NOT write any introduction, explanation, or commentary.",
+        "- Output the raw SKILL.md content directly, starting with the first --- line.",
+        "",
+        "The output must be valid markdown with YAML frontmatter:",
+        "---",
+        `name: ${name}`,
+        ...(description ? [`description: ${description}`] : [`description: Use when the user asks about ${name}.`]),
+        "---",
+        "",
+        `# ${name.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}`,
+        "",
+        "## When to Use",
+        "Describe when this skill should be triggered — what the user might say or ask.",
+        "",
+        "## Instructions",
+        "Step-by-step guidance for the AI assistant on how to handle this task.",
+        "",
+        "## Examples",
+        "Provide 1-2 concrete examples of how this skill should be applied.",
+      ]
+        .filter(Boolean)
+        .join("\n")
+
+      yield* Effect.logInfo("Generating skill via AI", { name, description })
+
+      const sessionID = SessionID.descending()
+
+      const SKILL_GENERATE_AGENT: Agent.Info = {
+        name: "skill-generate",
+        mode: "primary",
+        permission: [],
+        options: {},
+        native: true,
+        prompt: "",
+      }
+
+      const rawResult = yield* llm
+        .stream({
+          agent: SKILL_GENERATE_AGENT,
+          user: {
+            id: MessageID.ascending(),
+            sessionID,
+            role: "user",
+            time: { created: Date.now() },
+            agent: SKILL_GENERATE_AGENT.name,
+            model: { providerID: model.providerID, modelID: model.id },
+          },
+          system: [],
+          small: true,
+          tools: {},
+          model,
+          sessionID,
+          retries: 2,
+          messages: [{ role: "user", content: prompt }],
+        })
+        .pipe(
+          Stream.filter(LLMEvent.is.textDelta),
+          Stream.map((event) => event.text),
+          Stream.mkString,
+          Effect.catchCause(() =>
+            Effect.fail(
+              skillError("invalid", "AI call failed. Check server logs for details."),
+            ),
+          ),
+        )
+
+      const content = extractMarkdown(rawResult)
+      if (!content) {
+        yield* Effect.logWarning("AI returned empty content", { name, preview: rawResult.slice(0, 200) })
+        return yield* Effect.fail(skillError("invalid", "AI returned empty content. Try a more specific description."))
+      }
+
+      yield* Effect.logInfo("Skill content generated", { name, length: content.length })
+      return { content }
+    })
+
     const getLsp = Effect.fn("InstanceHttpApi.lsp")(function* () {
       return yield* lsp.status()
     })
@@ -267,6 +389,7 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
       .handle("skillCreate", createSkill)
       .handle("skillUpdate", updateSkill)
       .handle("skillDelete", deleteSkill)
+      .handle("skillGenerate", skillGenerate)
       .handle("lsp", getLsp)
       .handle("formatter", getFormatter)
   }),

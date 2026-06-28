@@ -1,5 +1,7 @@
 import { Icon } from "@opencode-ai/ui/icon"
 import { Markdown } from "@opencode-ai/session-ui/markdown"
+import { Dialog } from "@opencode-ai/ui/dialog"
+import { useDialog } from "@opencode-ai/ui/context/dialog"
 import {
   createEffect,
   createMemo,
@@ -65,6 +67,7 @@ function SkillsContent() {
   const [searchParams] = useSearchParams<{ project?: string }>()
   const serverSDK = useServerSDK()
   const server = useServer()
+  const dialog = useDialog()
   const [selected, setSelected] = createSignal<string>()
   const [query, setQuery] = createSignal("")
   const [source, setSource] = createSignal<SkillSourceFilter>("all")
@@ -77,6 +80,10 @@ function SkillsContent() {
   const [busy, setBusy] = createSignal(false)
   const [message, setMessage] = createSignal<string>()
   const [actionError, setActionError] = createSignal<string>()
+  const [smartName, setSmartName] = createSignal("")
+  const [smartDescription, setSmartDescription] = createSignal("")
+  const [smartGenerating, setSmartGenerating] = createSignal(false)
+  const [smartError, setSmartError] = createSignal<string>()
 
   const directory = createMemo(() => {
     if (params.dir) return decode64(params.dir) ?? ""
@@ -160,6 +167,51 @@ function SkillsContent() {
     setCreateSource(directory() ? "project" : "global")
   }
 
+  const startSmartCreate = () => {
+    setSmartName("")
+    setSmartDescription("")
+    setSmartError(undefined)
+    setSmartGenerating(false)
+    dialog.push(() => <SmartCreateDialog />)
+  }
+
+  const smartCreate = async () => {
+    const name = smartName().trim()
+    if (!name) {
+      setSmartError("请输入技能名称。")
+      return
+    }
+    setSmartGenerating(true)
+    setSmartError(undefined)
+    try {
+      const result = await requestSkill<{ content: string }>(server.current, {
+        path: "/skill/generate",
+        method: "POST",
+        directory: directory() || undefined,
+        payload: {
+          name,
+          description: smartDescription().trim() || undefined,
+        },
+      })
+      if (!result?.content) {
+        setSmartError("AI 返回了空内容，请重试。")
+        return
+      }
+      setCreateName(name)
+      setCreateDescription(smartDescription().trim())
+      setCreateContent(result.content)
+      dialog.close()
+      setMode("create")
+      setSelected(undefined)
+      setMessage(undefined)
+      setActionError(undefined)
+    } catch (err) {
+      setSmartError(errorMessage(err))
+    } finally {
+      setSmartGenerating(false)
+    }
+  }
+
   const refresh = async (next?: string) => {
     await refetch()
     if (next) setSelected(next)
@@ -239,6 +291,121 @@ function SkillsContent() {
     } finally {
       setBusy(false)
     }
+  }
+
+  function SmartCreateDialog() {
+    return (
+      <Dialog title="智能创建技能" size="x-large">
+        <div class="flex flex-col gap-6 px-2 pb-2 pt-1">
+          <div class="rounded-[8px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-4 py-3">
+            <div class="flex items-start gap-3">
+              <span class="mt-0.5 inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-[var(--v2-blue-400)]/10 text-[var(--v2-blue-500)]">
+                <Icon name="brain" size="small" class="size-4" />
+              </span>
+              <div class="min-w-0">
+                <p class="text-[13px] font-[530] text-[var(--v2-text-text-base)]">AI 智能生成</p>
+                <p class="mt-0.5 text-[12px] leading-relaxed text-[var(--v2-text-text-muted)]">
+                  输入名称和简介，AI 将自动生成完整的 SKILL.md 并填充到创建表单中
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex flex-col gap-4">
+            <Show when={smartGenerating()}>
+              <div class="flex flex-col items-center gap-3 rounded-[8px] border border-[var(--v2-blue-400)]/20 bg-[var(--v2-blue-400)]/4 px-4 py-6">
+                <span class="inline-flex gap-1">
+                  <span class="size-2 rounded-full bg-[var(--v2-blue-400)] animate-pulse" style="animation-delay:0ms" />
+                  <span class="size-2 rounded-full bg-[var(--v2-blue-400)] animate-pulse" style="animation-delay:200ms" />
+                  <span class="size-2 rounded-full bg-[var(--v2-blue-400)] animate-pulse" style="animation-delay:400ms" />
+                </span>
+                <div class="text-center">
+                  <p class="text-[13px] font-[530] text-[var(--v2-text-text-base)]">AI 正在生成 SKILL.md...</p>
+                  <p class="mt-1 text-[12px] text-[var(--v2-text-text-muted)]">正在调用模型为 "{smartName()}" 生成完整技能文档，请稍候</p>
+                </div>
+              </div>
+            </Show>
+
+            <Show when={!smartGenerating()}>
+            <label class="flex flex-col gap-1.5">
+              <span class="text-[12px] font-[530] text-[var(--v2-text-text-base)]">
+                名称
+                <span class="ml-0.5 text-[var(--v2-red-400)]">*</span>
+              </span>
+              <input
+                autofocus
+                value={smartName()}
+                onInput={(event) => setSmartName(event.currentTarget.value)}
+                placeholder="输入技能名称，如 my-skill"
+                disabled={smartGenerating()}
+                class={inputClass()}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") event.preventDefault()
+                }}
+              />
+            </label>
+
+            <label class="flex flex-col gap-1.5">
+              <span class="text-[12px] font-[530] text-[var(--v2-text-text-base)]">简介</span>
+              <textarea
+                value={smartDescription()}
+                onInput={(event) => setSmartDescription(event.currentTarget.value)}
+                placeholder="描述这个技能的功能、使用场景和触发条件"
+                disabled={smartGenerating()}
+                rows={4}
+                class={inputClass() + " min-h-[80px] resize-none py-2 leading-relaxed"}
+              />
+              <span class="text-[11px] text-[var(--v2-text-text-faint)]">
+                可选的补充说明，帮助 AI 更准确地生成技能内容
+              </span>
+            </label>
+            </Show>
+          </div>
+
+          <Show when={smartError()}>
+            <div class="flex items-start gap-2 rounded-[6px] border border-[var(--v2-red-400)]/30 bg-[var(--v2-red-400)]/8 px-3 py-2.5">
+              <span class="mt-px inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-[var(--v2-red-400)]/20 text-[var(--v2-red-500)] text-[10px] font-[700]">!</span>
+              <p class="text-[12px] leading-relaxed text-[var(--v2-text-text-base)]">{smartError()}</p>
+            </div>
+          </Show>
+
+          <div class="flex items-center justify-end gap-2.5 border-t border-[var(--v2-border-border-base)] pt-5">
+            <button
+              type="button"
+              onClick={() => dialog.close()}
+              disabled={smartGenerating()}
+              class={secondaryButton()}
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={smartCreate}
+              disabled={smartGenerating() || !smartName().trim()}
+              class={primaryButton()}
+            >
+              <Show
+                when={smartGenerating()}
+                fallback={
+                  <span class="inline-flex items-center gap-1.5">
+                    生成
+                  </span>
+                }
+              >
+                <span class="inline-flex items-center gap-1.5">
+                  <span class="inline-flex gap-0.5">
+                    <span class="size-1 rounded-full bg-current opacity-60 animate-pulse" style="animation-delay:0ms" />
+                    <span class="size-1 rounded-full bg-current opacity-60 animate-pulse" style="animation-delay:150ms" />
+                    <span class="size-1 rounded-full bg-current opacity-60 animate-pulse" style="animation-delay:300ms" />
+                  </span>
+                  正在生成...
+                </span>
+              </Show>
+            </button>
+          </div>
+        </div>
+      </Dialog>
+    )
   }
 
   return (
@@ -408,10 +575,12 @@ function SkillsContent() {
               onSave={save}
               onCreate={create}
               onDelete={remove}
+              onSmartCreate={startSmartCreate}
             />
           </Show>
         </div>
       </div>
+
     </div>
   )
 }
@@ -468,6 +637,7 @@ function SkillDetail(props: {
   onSave: () => void
   onCreate: () => void
   onDelete: () => void
+  onSmartCreate: () => void
 }) {
   const builtin = () => props.skill?.location === "<built-in>"
   const editable = () => props.file?.editable === true && !builtin()
@@ -484,6 +654,9 @@ function SkillDetail(props: {
                 <p class="mt-1 text-[12px] text-[var(--v2-text-text-muted)]">创建后会立即重新加载技能列表。</p>
               </div>
               <div class="flex shrink-0 items-center" style="gap: 1rem">
+                <button type="button" onClick={props.onSmartCreate} disabled={props.busy} class={secondaryButton()}>
+                  智能创建
+                </button>
                 <button type="button" onClick={props.onCreate} disabled={props.busy || !props.createName.trim()} class={secondaryButton()}>
                   创建
                 </button>

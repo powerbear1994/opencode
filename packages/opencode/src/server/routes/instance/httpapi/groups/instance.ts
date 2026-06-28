@@ -66,6 +66,15 @@ export const SkillDeletePayload = Schema.Struct({
   location: Schema.String,
 })
 
+export const SkillGeneratePayload = Schema.Struct({
+  name: Schema.String,
+  description: Schema.optional(Schema.String),
+})
+
+export const SkillGenerateResult = Schema.Struct({
+  content: Schema.String,
+})
+
 export class ApiSkillManageError extends Schema.ErrorClass<ApiSkillManageError>("SkillManageError")(
   {
     name: Schema.Literal("SkillManageError"),
@@ -89,6 +98,7 @@ export const InstancePaths = {
   agent: "/agent",
   skill: "/skill",
   skillFile: "/skill/file",
+  skillGenerate: "/skill/generate",
   lsp: "/lsp",
   formatter: "/formatter",
 } as const
@@ -249,6 +259,18 @@ export const InstanceApi = HttpApi.make("instance")
             identifier: "app.skillDelete",
             summary: "Delete skill",
             description: "Delete an available disk-backed skill.",
+          }),
+        ),
+        HttpApiEndpoint.post("skillGenerate", InstancePaths.skillGenerate, {
+          query: WorkspaceRoutingQuery,
+          payload: SkillGeneratePayload,
+          success: described(SkillGenerateResult, "Generated skill markdown"),
+          error: ApiSkillManageError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "app.skillGenerate",
+            summary: "Generate skill",
+            description: "Generate a SKILL.md document using AI based on name and description.",
           }),
         ),
         HttpApiEndpoint.get("lsp", InstancePaths.lsp, {
