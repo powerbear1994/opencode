@@ -38,6 +38,7 @@ export interface AgentWithSource extends Agent {
 /** Raw agent file content for editing */
 export interface AgentFileContent {
   name: string
+  path: string
   content: string
   frontmatter: Record<string, unknown>
   body: string

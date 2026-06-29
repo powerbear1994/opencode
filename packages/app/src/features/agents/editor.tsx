@@ -9,7 +9,7 @@ import { SelectV2 } from "@opencode-ai/ui/v2/select-v2"
 import { Switch } from "@opencode-ai/ui/v2/switch-v2"
 import { useModels } from "@/context/models"
 import type { AgentFormData, AgentLocation, PermissionAction } from "./types"
-import { BUILTIN_AGENT_NAMES, DEFAULT_PERMISSIONS, PERMISSION_KEYS, type PermissionKey } from "./types"
+import { BUILTIN_AGENT_NAMES, DEFAULT_PERMISSIONS, PERMISSION_KEYS, PERMISSION_TOOL_LABELS, type PermissionKey } from "./types"
 import "./editor.css"
 
 interface AgentEditorProps {
@@ -22,6 +22,7 @@ interface AgentEditorProps {
   hasProject?: boolean
   createAsSubagent?: boolean
   variant?: "dialog" | "inline"
+  onSmartGenerate?: () => void
   onSave: (data: AgentFormData) => void
   onCancel?: () => void
 }
@@ -73,7 +74,10 @@ const PermissionRow: Component<{
   onChange: (action: PermissionAction) => void
 }> = (props) => (
   <div class="agent-editor-permission-row">
-    <span class="font-mono text-[13px] text-text-base">{props.tool}</span>
+    <div class="min-w-0">
+      <p class="truncate font-mono text-[12px] text-text-base">{props.tool}</p>
+      <p class="mt-0.5 truncate text-[10px] text-text-muted">{PERMISSION_TOOL_LABELS[props.tool]}</p>
+    </div>
     <div class="agent-editor-permission-control" role="group" aria-label={`${props.tool} 权限`}>
       <For each={ACTION_OPTIONS}>
         {(option) => (
@@ -161,11 +165,17 @@ export const AgentEditor: Component<AgentEditorProps> = (props) => {
   const normalizedName = createMemo(() => (state.form.name ?? "").trim().toLowerCase())
   const nameError = createMemo(() => {
     if (!(state.form.name ?? "").trim()) return ""
-    if (!/^[a-z0-9._-]+$/.test(normalizedName())) return "仅支持字母、数字、点、下划线和连字符。"
+    if (!/^[a-z][a-z0-9._-]*$/.test(normalizedName())) return "必须以字母开头，仅支持字母、数字、点、下划线和连字符。"
     if (BUILTIN_AGENT_NAMES.has(normalizedName())) return "该名称为内置智能体保留名称。"
     return ""
   })
-  const valid = createMemo(() => !!normalizedName() && !nameError() && !!(state.form.description ?? "").trim())
+  const valid = createMemo(
+    () =>
+      !!normalizedName() &&
+      !nameError() &&
+      !!(state.form.description ?? "").trim() &&
+      !!(state.form.prompt ?? "").trim(),
+  )
 
   const handleSave = () => {
     if (!valid()) return
@@ -183,9 +193,7 @@ export const AgentEditor: Component<AgentEditorProps> = (props) => {
               <div class="agent-editor-field-span">
                 <div class="agent-editor-required-label">
                   <span>{props.nameLocked ? "名称（不可修改）" : "名称"}</span>
-                  <Show when={!props.nameLocked}>
-                    <span aria-hidden="true">*</span>
-                  </Show>
+                  <span aria-hidden="true">*</span>
                 </div>
                 <TextField
                   autofocus={!props.nameLocked}
@@ -197,7 +205,7 @@ export const AgentEditor: Component<AgentEditorProps> = (props) => {
                   disabled={props.nameLocked}
                   required
                   error={nameError()}
-                  description={props.nameLocked ? undefined : "用于生成智能体文件名，保存后不可修改。"}
+                  description={props.nameLocked ? undefined : "必须以字母开头，仅支持小写字母、数字、点、下划线和连字符，保存后不可修改。"}
                 />
               </div>
 
@@ -358,9 +366,10 @@ export const AgentEditor: Component<AgentEditorProps> = (props) => {
           </section>
 
           <section class="mb-5">
-            <h3 class="mb-2 text-[12px] font-[530] uppercase tracking-0 text-[var(--v2-text-text-muted)]">
-              系统提示词
-            </h3>
+            <div class="agent-editor-required-label mb-2">
+              <span>系统提示词</span>
+              <span aria-hidden="true">*</span>
+            </div>
             <div class="flex flex-col gap-3">
               <MarkdownEditorPreview
                 value={state.form.prompt}
@@ -393,13 +402,26 @@ export const AgentEditor: Component<AgentEditorProps> = (props) => {
           <div class="flex items-start justify-between gap-3">
             <div class="min-w-0">
               <h2 class="truncate text-[18px] font-[530] text-[var(--v2-text-text-base)]">{props.title}</h2>
+              <p class="mt-1 text-[12px] text-[var(--v2-text-text-muted)]">
+                保存后会重新加载智能体列表并同步当前配置。
+              </p>
             </div>
-            <div class="flex shrink-0 items-center gap-1.5">
+            <div class="flex shrink-0 items-center gap-2.5">
+              <Show when={!props.nameLocked && props.onSmartGenerate}>
+                <button
+                  type="button"
+                  onClick={() => props.onSmartGenerate?.()}
+                  disabled={props.loading}
+                  class="inline-flex h-8 items-center gap-1.5 rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-3 text-[12px] font-[530] text-[var(--v2-text-text-base)] transition-colors hover:bg-[var(--v2-background-bg-layer-02)] disabled:opacity-50"
+                >
+                  智能生成
+                </button>
+              </Show>
               <button
                 type="button"
                 onClick={handleSave}
                 disabled={props.loading || !valid()}
-                class="inline-flex h-8 items-center gap-1.5 rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-3 text-[12px] font-[530] text-[var(--v2-text-text-base)] transition-colors hover:bg-[var(--v2-background-bg-layer-02)] disabled:cursor-not-allowed disabled:opacity-60"
+                class="inline-flex h-8 items-center gap-1.5 rounded-[6px] bg-[var(--v2-text-text-base)] px-3 text-[12px] font-[530] text-[var(--v2-background-bg-base)] transition-opacity hover:opacity-90 disabled:opacity-50"
               >
                 {props.loading ? "保存中..." : props.nameLocked ? "保存" : "创建"}
               </button>
@@ -407,7 +429,7 @@ export const AgentEditor: Component<AgentEditorProps> = (props) => {
                 type="button"
                 onClick={() => props.onCancel?.()}
                 disabled={props.loading}
-                class="inline-flex h-8 items-center gap-1.5 rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-3 text-[12px] font-[530] text-[var(--v2-text-text-base)] transition-colors hover:bg-[var(--v2-background-bg-layer-02)] disabled:cursor-not-allowed disabled:opacity-60"
+                class="inline-flex h-8 items-center gap-1.5 rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-3 text-[12px] font-[530] text-[var(--v2-text-text-base)] transition-colors hover:bg-[var(--v2-background-bg-layer-02)] disabled:opacity-50"
               >
                 取消
               </button>
@@ -484,32 +506,49 @@ function MarkdownEditorPreview(props: {
   return (
     <div
       ref={containerRef}
-      class="flex h-[calc(100vh-370px)] min-h-[320px] overflow-hidden rounded-[7px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)]"
+      class="flex h-[calc(100vh-370px)] min-h-[320px] flex-col overflow-hidden rounded-[7px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)]"
     >
-      <textarea
-        ref={editorRef}
-        value={props.value}
-        onInput={(event) => props.onInput(event.currentTarget.value)}
-        onScroll={onEditorScroll}
-        spellcheck={false}
-        style={{ width: `${split.value}%` }}
-        class="min-h-0 resize-none border-0 bg-transparent p-4 font-mono text-[12px] leading-5 text-[var(--v2-text-text-base)] outline-none placeholder:text-[var(--v2-text-text-faint)]"
-        placeholder="你是一个..."
-      />
-      <div class="flex shrink-0 cursor-col-resize items-center justify-center py-2" onMouseDown={onDividerDown}>
-        <div class="h-full w-px bg-[var(--v2-border-border-base)]" />
+      <div class="flex h-8 shrink-0 border-b border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-base)]">
+        <div
+          style={{ width: `${split.value}%` }}
+          class="flex items-center px-4 text-[11px] font-[530] text-[var(--v2-text-text-muted)]"
+        >
+          编辑
+        </div>
+        <div class="w-px bg-[var(--v2-border-border-base)]" />
+        <div
+          style={{ width: `${100 - split.value}%` }}
+          class="flex items-center px-4 text-[11px] font-[530] text-[var(--v2-text-text-muted)]"
+        >
+          预览
+        </div>
       </div>
-      <div
-        ref={previewRef}
-        onScroll={onPreviewScroll}
-        style={{ width: `${100 - split.value}%` }}
-        class="min-h-0 min-w-0 overflow-y-auto p-4"
-      >
-        <Markdown
-          text={props.preview || " "}
-          cacheKey={props.cacheKey}
-          class="text-[13px] leading-relaxed text-[var(--v2-text-text-base)]"
+      <div class="flex min-h-0 flex-1">
+        <textarea
+          ref={editorRef}
+          value={props.value}
+          onInput={(event) => props.onInput(event.currentTarget.value)}
+          onScroll={onEditorScroll}
+          spellcheck={false}
+          style={{ width: `${split.value}%` }}
+          class="h-full min-h-0 resize-none border-0 bg-transparent p-4 font-mono text-[12px] leading-5 text-[var(--v2-text-text-base)] outline-none placeholder:text-[var(--v2-text-text-faint)]"
+          placeholder="你是一个..."
         />
+        <div class="flex shrink-0 cursor-col-resize items-center justify-center py-2" onMouseDown={onDividerDown}>
+          <div class="h-full w-px bg-[var(--v2-border-border-base)]" />
+        </div>
+        <div
+          ref={previewRef}
+          onScroll={onPreviewScroll}
+          style={{ width: `${100 - split.value}%` }}
+          class="h-full min-h-0 min-w-0 overflow-y-auto p-4"
+        >
+          <Markdown
+            text={props.preview || " "}
+            cacheKey={props.cacheKey}
+            class="text-[13px] leading-relaxed text-[var(--v2-text-text-base)]"
+          />
+        </div>
       </div>
     </div>
   )

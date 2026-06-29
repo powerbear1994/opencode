@@ -11,6 +11,7 @@ import { Effect, Stream } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
 import {
+  AgentGeneratePayload,
   ApiSkillManageError,
   ApiVcsApplyError,
   SkillCreatePayload,
@@ -27,6 +28,8 @@ import { LLM } from "@/session/llm"
 import { Provider } from "@/provider/provider"
 import { LLMEvent } from "@opencode-ai/llm"
 import { MessageID, SessionID } from "@/session/schema"
+
+const DEFAULT_SKILL_DIRECTORIES = ["references", "scripts", "assets"]
 
 function skillDocument(input: { name: string; description?: string; content: string }) {
   if (parseSkillDocument(input.content)) return input.content
@@ -50,6 +53,17 @@ function skillSegment(name: string) {
   return slug
 }
 
+function agentSegment(name: string) {
+  const slug = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+  if (!slug) return
+  return slug
+}
+
 function parseSkillDocument(content: string) {
   const parsed = ConfigMarkdown.parseOption(content)
   if (!parsed) return
@@ -62,6 +76,19 @@ function parseSkillDocument(content: string) {
   }
 }
 
+function normalizeSkillFilePath(file: string | undefined) {
+  const value = file?.trim() || "SKILL.md"
+  const normalized = value.split(path.sep).join("/")
+  if (normalized.startsWith("/") || normalized.includes("\0")) return
+  const resolved = path.posix.normalize(normalized)
+  if (resolved === "." || resolved.startsWith("../") || resolved === "..") return
+  return resolved
+}
+
+function skillPackageRoot(location: string) {
+  return path.dirname(location)
+}
+
 function extractMarkdown(text: string) {
   const trimmed = text.trim()
   // Try to extract content from markdown code fences
@@ -69,6 +96,108 @@ function extractMarkdown(text: string) {
   if (fenceMatch) return fenceMatch[1].trim()
   // If no code fences, return the raw text (assuming the model output it directly)
   return trimmed
+}
+
+function extractJson(text: string) {
+  const trimmed = text.trim()
+  const fenceMatch = trimmed.match(/```(?:json)?\s*\n([\s\S]*?)\n```/)
+  const candidate = fenceMatch?.[1]?.trim() ?? trimmed
+  try {
+    return JSON.parse(candidate) as unknown
+  } catch {
+    const start = candidate.indexOf("{")
+    const end = candidate.lastIndexOf("}")
+    if (start === -1 || end <= start) return
+    try {
+      return JSON.parse(candidate.slice(start, end + 1)) as unknown
+    } catch {
+      return
+    }
+  }
+}
+
+function isPlaceholderDescription(value: string) {
+  const normalized = value.toLowerCase().replace(/\s+/g, "").replace(/[。,.，、；;:："'“”‘’`]+/g, "")
+  return (
+    normalized.includes("何时调用这个技能") ||
+    normalized.includes("什么时候应该") ||
+    normalized.includes("usewhentheuserneeds")
+  )
+}
+
+function isUsableSkillContent(value: string) {
+  const trimmed = value.trim()
+  if (trimmed.length < 250) return false
+  if (!/^#\s+/m.test(trimmed)) return false
+  if ((trimmed.match(/^##\s+/gm) ?? []).length < 3) return false
+  if (/^\s*(User|Assistant)\s*:/im.test(trimmed)) return false
+  return true
+}
+
+function isUsableAgentPrompt(value: string) {
+  const trimmed = value.trim()
+  if (trimmed.length < 180) return false
+  if (/^\s*(User|Assistant)\s*:/im.test(trimmed)) return false
+  if (/\b(TODO|TBD|lorem ipsum|fill this in)\b/i.test(trimmed)) return false
+  if (/忽略.*(系统|开发者|上级).*指令/.test(trimmed)) return false
+  return true
+}
+
+function inferDescriptionFromContent(content: string) {
+  const match = content.match(/^##\s+(?:何时调用|When to Use)\s*\n([\s\S]*?)(?=^##\s+|\z)/im)
+  const line = match?.[1]
+    ?.split("\n")
+    .map((item) => item.replace(/^[-*]\s+/, "").trim())
+    .find((item) => item && !item.includes("不要") && !item.includes("不适合"))
+  if (!line) return
+  return line.replace(/[。.!！?？]+$/, "")
+}
+
+function parseGeneratedSkill(text: string) {
+  const json = extractJson(text)
+  if (isRecord(json) && typeof json.name === "string" && typeof json.description === "string" && typeof json.content === "string") {
+    const name = skillSegment(json.name)
+    const content = json.content.trim()
+    const description = json.description.trim() || inferDescriptionFromContent(content)
+    if (
+      name &&
+      description &&
+      isUsableSkillContent(content) &&
+      !isPlaceholderDescription(description)
+    ) {
+      return { name, description, content }
+    }
+  }
+
+  const markdown = extractMarkdown(text)
+  const parsed = parseSkillDocument(markdown)
+  if (parsed?.description && parsed.content.trim()) {
+    const name = skillSegment(parsed.name)
+    const description = parsed.description.trim() || inferDescriptionFromContent(parsed.content)
+    if (
+      name &&
+      description &&
+      isUsableSkillContent(parsed.content) &&
+      !isPlaceholderDescription(description)
+    ) {
+      return { name, description, content: parsed.content.trim() }
+    }
+  }
+}
+
+function parseGeneratedAgent(text: string) {
+  const json = extractJson(text)
+  if (!isRecord(json)) return
+  if (typeof json.name !== "string") return
+  if (typeof json.description !== "string") return
+  if (typeof json.prompt !== "string") return
+
+  const name = agentSegment(json.name)
+  const description = json.description.trim()
+  const mode: "primary" | "all" | "subagent" = json.mode === "primary" || json.mode === "all" ? json.mode : "subagent"
+  const prompt = json.prompt.trim()
+  if (!name || description.length < 8 || !isUsableAgentPrompt(prompt)) return
+  return { name, description, mode, prompt }
 }
 
 export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance", (handlers) =>
@@ -156,6 +285,108 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
         },
       })
 
+    const agentGenerate = Effect.fn("InstanceHttpApi.agentGenerate")(function* (ctx: {
+      payload: typeof AgentGeneratePayload.Type
+    }) {
+      const name = agentSegment(ctx.payload.name)
+      if (!name) return yield* Effect.fail(skillError("invalid", "Agent name must contain lowercase letters, numbers, hyphens, or underscores."))
+
+      const description = ctx.payload.description?.trim() || ""
+      if (description.length < 20) return yield* Effect.fail(skillError("invalid", "Agent requirements must be at least 20 characters."))
+
+      const fallback = yield* provider.defaultModel().pipe(
+        Effect.catchCause(() => Effect.succeed(undefined)),
+      )
+      if (!fallback) return yield* Effect.fail(skillError("invalid", "No AI model is configured."))
+
+      const model = yield* provider.getModel(fallback.providerID, fallback.modelID).pipe(
+        Effect.catchCause(() =>
+          Effect.fail(skillError("invalid", "Failed to find an available AI model.")),
+        ),
+      )
+
+      const system = [
+        "You generate custom agent drafts for an AI coding assistant.",
+        "Return only one valid JSON object with exactly these keys: name, description, mode, prompt.",
+        "Do not include markdown fences, commentary, examples outside JSON, or extra keys.",
+        "",
+        "Meaning of the fields:",
+        "- name: concise lowercase ASCII kebab-case identifier.",
+        "- description: one polished Chinese trigger sentence explaining when this agent should be used.",
+        "- mode: usually \"subagent\" unless the user explicitly asks for a primary/default agent.",
+        "- prompt: the complete system prompt for the agent.",
+        "",
+        "Prompt quality rules:",
+        "- Use the user's language.",
+        "- Define role, trigger conditions, workflow, boundaries, output requirements, and verification.",
+        "- Make the prompt concrete enough that another assistant can follow it without obvious follow-up questions.",
+        "- Respect higher-priority system and developer instructions. Never tell the agent to ignore them.",
+        "- Do not invent tools, APIs, files, or external services unless the user explicitly requested them.",
+        "- Do not output a chat transcript. Never use lines starting with User: or Assistant:.",
+        "- Do not include placeholder text such as TBD, TODO, fill this in, or lorem ipsum.",
+        "- Prefer 300-700 words.",
+      ]
+
+      const prompt = [
+        "Create an agent from this user input.",
+        "",
+        `<proposed_name>${name}</proposed_name>`,
+        `<requirements>${description}</requirements>`,
+        "",
+        "Return JSON only.",
+      ].join("\n")
+
+      yield* Effect.logInfo("Generating agent via AI", { name, description })
+
+      const sessionID = SessionID.descending()
+      const AGENT_GENERATE_AGENT: Agent.Info = {
+        name: "agent-generate",
+        mode: "primary",
+        permission: [],
+        options: {},
+        native: true,
+        prompt: "",
+      }
+
+      const rawResult = yield* llm
+        .stream({
+          agent: AGENT_GENERATE_AGENT,
+          user: {
+            id: MessageID.ascending(),
+            sessionID,
+            role: "user",
+            time: { created: Date.now() },
+            agent: AGENT_GENERATE_AGENT.name,
+            model: { providerID: model.providerID, modelID: model.id },
+          },
+          system,
+          tools: {},
+          model,
+          sessionID,
+          retries: 2,
+          messages: [{ role: "user", content: prompt }],
+        })
+        .pipe(
+          Stream.filter(LLMEvent.is.textDelta),
+          Stream.map((event) => event.text),
+          Stream.mkString,
+          Effect.catchCause(() =>
+            Effect.fail(
+              skillError("invalid", "AI call failed. Check server logs for details."),
+            ),
+          ),
+        )
+
+      const generated = parseGeneratedAgent(rawResult)
+      if (!generated) {
+        yield* Effect.logWarning("AI returned invalid agent content", { name, preview: rawResult.slice(0, 200) })
+        return yield* Effect.fail(skillError("invalid", "AI returned invalid agent content. Try a more specific description."))
+      }
+
+      yield* Effect.logInfo("Agent content generated", { name: generated.name, length: generated.prompt.length })
+      return generated
+    })
+
     const findSkillByLocation = Effect.fn("InstanceHttpApi.skill.findByLocation")(function* (location: string) {
       const found = (yield* skill.all()).find((item) => item.location === location)
       if (!found) return yield* Effect.fail(skillError("missing", "Skill was not found."))
@@ -183,8 +414,23 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
       return (yield* skill.all()).find((item) => item.location === location) ?? toSkillInfo(location, parsed)
     })
 
-    const getSkillFile = Effect.fn("InstanceHttpApi.skillFile")(function* (ctx: { query: { location: string } }) {
+    const getSkillPackageFiles = Effect.fn("InstanceHttpApi.skill.files")(function* (location: string) {
+      if (location === "<built-in>") return [{ path: "SKILL.md", type: "file" as const }]
+      const root = skillPackageRoot(location)
+      const matches = yield* fs.glob("**/*", { cwd: root, include: "file", dot: true }).pipe(
+        Effect.catch(() => Effect.succeed(["SKILL.md"])),
+      )
+      return [...new Set(["SKILL.md", ...matches.map((item) => item.split(path.sep).join("/"))])]
+        .filter((item) => item !== "." && !item.startsWith("../"))
+        .toSorted((a, b) => (a === "SKILL.md" ? -1 : b === "SKILL.md" ? 1 : a.localeCompare(b)))
+        .map((item) => ({ path: item, type: "file" as const }))
+    })
+
+    const getSkillFile = Effect.fn("InstanceHttpApi.skillFile")(function* (ctx: { query: { location: string; file?: string } }) {
       const found = yield* findSkillByLocation(ctx.query.location)
+      const file = normalizeSkillFilePath(ctx.query.file)
+      if (!file) return yield* Effect.fail(skillError("invalid", "Skill file path is invalid."))
+      const files = yield* getSkillPackageFiles(found.location)
       const fallback = {
         content: skillDocument({
           name: found.name,
@@ -192,15 +438,23 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
           content: found.content,
         }),
         editable: false,
+        path: "SKILL.md",
+        files,
       }
       if (found.location === "<built-in>") {
         return fallback
       }
 
-      const content = yield* fs.readFileStringSafe(found.location)
+      const root = skillPackageRoot(found.location)
+      const target = path.resolve(root, file)
+      if (!FSUtil.contains(root, target)) return yield* Effect.fail(skillError("invalid", "Skill file path is invalid."))
+
+      const content = yield* fs.readFileStringSafe(target).pipe(
+        Effect.catch(() => Effect.succeed(undefined)),
+      )
       if (content === undefined) return fallback
 
-      return { content, editable: true }
+      return { content, editable: true, path: file, files }
     })
 
     const createSkill = Effect.fn("InstanceHttpApi.skillCreate")(function* (ctx: {
@@ -227,6 +481,24 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
         Effect.mapError(() => skillError("invalid", "Skill file could not be created.")),
       )
 
+      const root = skillPackageRoot(target)
+      for (const dir of DEFAULT_SKILL_DIRECTORIES) {
+        yield* fs.ensureDir(path.join(root, dir)).pipe(
+          Effect.mapError(() => skillError("invalid", "Skill directory could not be created.")),
+        )
+      }
+      for (const item of ctx.payload.files ?? []) {
+        const file = normalizeSkillFilePath(item.path)
+        if (!file || file === "SKILL.md") continue
+        const extraTarget = path.resolve(root, file)
+        if (!FSUtil.contains(root, extraTarget)) {
+          return yield* Effect.fail(skillError("invalid", "Skill file path is invalid."))
+        }
+        yield* fs.writeWithDirs(extraTarget, item.content).pipe(
+          Effect.mapError(() => skillError("invalid", "Skill file could not be created.")),
+        )
+      }
+
       return yield* reloadAndFind(target, parsed)
     })
 
@@ -234,14 +506,28 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
       payload: typeof SkillWritePayload.Type
     }) {
       const found = yield* findEditableSkill(ctx.payload.location)
-      const parsed = parseSkillDocument(ctx.payload.content)
-      if (!parsed) return yield* Effect.fail(skillError("invalid", "Skill markdown must include name frontmatter."))
+      const file = normalizeSkillFilePath(ctx.payload.file)
+      if (!file) return yield* Effect.fail(skillError("invalid", "Skill file path is invalid."))
+      const root = skillPackageRoot(found.location)
+      const target = path.resolve(root, file)
+      if (!FSUtil.contains(root, target)) return yield* Effect.fail(skillError("invalid", "Skill file path is invalid."))
 
-      yield* fs.writeWithDirs(found.location, ctx.payload.content).pipe(
+      if (file === "SKILL.md") {
+        const parsed = parseSkillDocument(ctx.payload.content)
+        if (!parsed) return yield* Effect.fail(skillError("invalid", "Skill markdown must include name frontmatter."))
+
+        yield* fs.writeWithDirs(found.location, ctx.payload.content).pipe(
+          Effect.mapError(() => skillError("invalid", "Skill file could not be saved.")),
+        )
+
+        return yield* reloadAndFind(found.location, parsed)
+      }
+
+      yield* fs.writeWithDirs(target, ctx.payload.content).pipe(
         Effect.mapError(() => skillError("invalid", "Skill file could not be saved.")),
       )
 
-      return yield* reloadAndFind(found.location, parsed)
+      return found
     })
 
     const deleteSkill = Effect.fn("InstanceHttpApi.skillDelete")(function* (ctx: {
@@ -273,45 +559,66 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
       )
       if (!fallback) return yield* Effect.fail(skillError("invalid", "No AI model is configured."))
 
-      const model =
-        (yield* provider.getSmallModel(fallback.providerID)) ??
-        (yield* provider.getModel(fallback.providerID, fallback.modelID).pipe(
-          Effect.catchCause(() =>
-            Effect.fail(skillError("invalid", "Failed to find an available AI model.")),
-          ),
-        ))
+      const model = yield* provider.getModel(fallback.providerID, fallback.modelID).pipe(
+        Effect.catchCause(() =>
+          Effect.fail(skillError("invalid", "Failed to find an available AI model.")),
+        ),
+      )
 
-      const prompt = [
-        "Write a SKILL.md file for the following skill. Output ONLY the file content, nothing else.",
+      const system = [
+        "You generate SKILL.md drafts for an AI coding assistant.",
+        "Return only one valid JSON object with exactly these keys: name, description, content.",
+        "Do not include markdown fences, commentary, examples outside JSON, or extra keys.",
+        "Do not copy literal placeholder text from the instructions.",
         "",
-        `Skill name: ${name}`,
-        description ? `What it does: ${description}` : "",
+        "Meaning of the fields:",
+        "- name: the skill identifier, concise lowercase ASCII kebab-case.",
+        "- description: when this skill should be loaded. It is a polished trigger sentence, not the user's raw request.",
+        "- content: the Markdown body of the skill. It must not contain YAML frontmatter, name metadata, or description metadata.",
         "",
-        "Rules:",
-        "- Do NOT search for existing files, examples, or references.",
-        "- Do NOT use any tools.",
-        "- Do NOT write any introduction, explanation, or commentary.",
-        "- Output the raw SKILL.md content directly, starting with the first --- line.",
+        "Quality rules:",
+        "- Generate a usable skill based on the user's requirements.",
+        "- Use the user's language for description and content.",
+        "- The description must explain when to load the skill in one concise trigger sentence.",
+        "- The content must be detailed enough for another assistant to follow without obvious follow-up questions.",
+        "- Do not output a chat transcript. Never use lines starting with User: or Assistant:.",
+        "- Do not invent external commands, APIs, tools, or files unless the user explicitly requested them.",
+        "- Do not include placeholder text such as TBD, TODO, fill this in, lorem ipsum, or 什么时候应该加载这个技能.",
         "",
-        "The output must be valid markdown with YAML frontmatter:",
-        "---",
-        `name: ${name}`,
-        ...(description ? [`description: ${description}`] : [`description: Use when the user asks about ${name}.`]),
-        "---",
+        "The content Markdown must include these sections, localized to the user's language:",
+        "# 技能标题",
         "",
-        `# ${name.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}`,
+        "## 何时调用",
+        "- 3-5 concrete trigger bullets.",
+        "- Include one boundary describing when not to use this skill.",
         "",
-        "## When to Use",
-        "Describe when this skill should be triggered — what the user might say or ask.",
+        "## 技能内容",
+        "- A clear step-by-step workflow.",
+        "- Include what context to inspect, what to produce, and how to verify the result.",
+        "- Prefer concrete assistant behavior over vague advice.",
         "",
-        "## Instructions",
-        "Step-by-step guidance for the AI assistant on how to handle this task.",
+        "## 输出要求",
+        "- Define the expected final answer or artifact format.",
         "",
-        "## Examples",
-        "Provide 1-2 concrete examples of how this skill should be applied.",
+        "## 约束",
+        "- Important limits, safety checks, and things to avoid.",
+        "",
+        "## 示例",
+        "- 1-2 realistic trigger requests.",
+        "- Describe the expected assistant behavior. Do not write as a User/Assistant transcript.",
+        "",
+        "The content should usually be 350-800 words.",
       ]
         .filter(Boolean)
-        .join("\n")
+
+      const prompt = [
+        "Create a skill from this user input.",
+        "",
+        `<proposed_name>${name}</proposed_name>`,
+        `<requirements>${description}</requirements>`,
+        "",
+        "Return JSON only.",
+      ].join("\n")
 
       yield* Effect.logInfo("Generating skill via AI", { name, description })
 
@@ -337,8 +644,7 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
             agent: SKILL_GENERATE_AGENT.name,
             model: { providerID: model.providerID, modelID: model.id },
           },
-          system: [],
-          small: true,
+          system,
           tools: {},
           model,
           sessionID,
@@ -356,14 +662,25 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
           ),
         )
 
-      const content = extractMarkdown(rawResult)
-      if (!content) {
+      const generated = parseGeneratedSkill(rawResult)
+      if (!generated) {
         yield* Effect.logWarning("AI returned empty content", { name, preview: rawResult.slice(0, 200) })
-        return yield* Effect.fail(skillError("invalid", "AI returned empty content. Try a more specific description."))
+        return yield* Effect.fail(skillError("invalid", "AI returned invalid skill content. Try a more specific description."))
       }
 
-      yield* Effect.logInfo("Skill content generated", { name, length: content.length })
-      return { content }
+      const document = skillDocument(generated)
+      const parsed = parseSkillDocument(document)
+      if (!parsed) {
+        yield* Effect.logWarning("AI returned invalid skill markdown", { name, preview: document.slice(0, 200) })
+        return yield* Effect.fail(skillError("invalid", "AI returned invalid SKILL.md content. Try a more specific description."))
+      }
+
+      yield* Effect.logInfo("Skill content generated", { name: parsed.name, length: document.length })
+      return {
+        name: parsed.name,
+        description: generated.description,
+        content: document,
+      }
     })
 
     const getLsp = Effect.fn("InstanceHttpApi.lsp")(function* () {
@@ -384,6 +701,7 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
       .handle("vcsApply", applyVcs)
       .handle("command", getCommand)
       .handle("agent", getAgent)
+      .handle("agentGenerate", agentGenerate)
       .handle("skill", getSkill)
       .handle("skillFile", getSkillFile)
       .handle("skillCreate", createSkill)

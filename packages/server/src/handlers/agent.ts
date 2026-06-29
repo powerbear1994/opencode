@@ -72,6 +72,7 @@ export const AgentHandler = HttpApiBuilder.group(Api, "server.agent", (handlers)
           return yield* response(
             Effect.succeed({
               name: id,
+              path: filePath,
               content,
               frontmatter: parsed.data as Record<string, unknown>,
               body: (parsed.content as string).trim(),
@@ -113,6 +114,7 @@ export const AgentHandler = HttpApiBuilder.group(Api, "server.agent", (handlers)
           // Write file
           yield* Effect.promise(() => fsp.mkdir(dir, { recursive: true }))
           yield* Effect.promise(() => fsp.writeFile(filePath, markdown, "utf-8"))
+          yield* AgentV2.Service.use((agent) => agent.reload())
 
           return yield* response(
             Effect.succeed({ name: slug, path: filePath }),
@@ -159,6 +161,7 @@ export const AgentHandler = HttpApiBuilder.group(Api, "server.agent", (handlers)
 
           // Write file
           yield* Effect.promise(() => fsp.writeFile(filePath, markdown, "utf-8"))
+          yield* AgentV2.Service.use((agent) => agent.reload())
 
           return yield* response(
             Effect.succeed({ name: slug, path: filePath }),
@@ -193,6 +196,7 @@ export const AgentHandler = HttpApiBuilder.group(Api, "server.agent", (handlers)
 
           // Delete file
           yield* Effect.promise(() => fsp.unlink(filePath))
+          yield* AgentV2.Service.use((agent) => agent.reload())
         }),
       )
   }),

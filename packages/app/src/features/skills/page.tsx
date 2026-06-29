@@ -21,10 +21,7 @@ import { authTokenFromCredentials } from "@/utils/server"
 import { decode64 } from "@/utils/base64"
 import {
   filterSkills,
-  SKILL_CATEGORY_LABELS,
   SKILL_SOURCE_LABELS,
-  skillCategory,
-  skillDirectory,
   skillSource,
   type SkillInfo,
   type SkillSource,
@@ -34,20 +31,51 @@ import {
 type SkillFile = {
   content: string
   editable: boolean
+  path: string
+  files: { path: string; type: "file" }[]
+}
+
+type GeneratedSkill = {
+  name: string
+  description: string
+  content: string
+}
+
+type DraftSkillFile = {
+  path: string
+  type: "file"
+  content: string
 }
 
 type SkillCreateSource = "project" | "global"
 type DetailMode = "view" | "edit" | "create"
 
+const DEFAULT_CREATE_BODY = [
+  "# 使用方式",
+  "",
+  "## 何时调用",
+  "",
+  "- ",
+  "",
+  "## 工作流程",
+  "",
+  "1. ",
+  "",
+  "## 输出要求",
+  "",
+  "- ",
+  "",
+  "## 约束",
+  "",
+  "- ",
+].join("\n")
+const MIN_SMART_DESCRIPTION_LENGTH = 20
+
 function ErrorFallback(err: Error, reset: () => void) {
   return (
     <div class="flex h-full w-full flex-col items-center justify-center gap-3">
       <p class="text-[13px] text-[var(--v2-text-text-muted)]">加载技能失败：{err.message}</p>
-      <button
-        type="button"
-        onClick={reset}
-        class="rounded-[6px] bg-[var(--v2-background-bg-layer-01)] px-3 py-1.5 text-[13px] text-[var(--v2-text-text-base)] transition-colors hover:bg-[var(--v2-background-bg-layer-02)]"
-      >
+      <button type="button" onClick={reset} class={secondaryButton()}>
         重试
       </button>
     </div>
@@ -73,10 +101,15 @@ function SkillsContent() {
   const [source, setSource] = createSignal<SkillSourceFilter>("all")
   const [mode, setMode] = createSignal<DetailMode>("view")
   const [draft, setDraft] = createSignal("")
+  const [selectedFile, setSelectedFile] = createSignal("SKILL.md")
   const [createName, setCreateName] = createSignal("")
   const [createDescription, setCreateDescription] = createSignal("")
   const [createSource, setCreateSource] = createSignal<SkillCreateSource>("project")
-  const [createContent, setCreateContent] = createSignal("# 使用方式\n\n描述这个技能应该在什么情况下被加载。")
+  const [createContent, setCreateContent] = createSignal(skillDocumentDraft("", "", DEFAULT_CREATE_BODY))
+  const [createFiles, setCreateFiles] = createSignal<DraftSkillFile[]>([])
+  const [createSelectedFile, setCreateSelectedFile] = createSignal("SKILL.md")
+  const [createSelectedDirectory, setCreateSelectedDirectory] = createSignal("")
+  const [selectedDirectory, setSelectedDirectory] = createSignal("references")
   const [busy, setBusy] = createSignal(false)
   const [message, setMessage] = createSignal<string>()
   const [actionError, setActionError] = createSignal<string>()
@@ -84,6 +117,10 @@ function SkillsContent() {
   const [smartDescription, setSmartDescription] = createSignal("")
   const [smartGenerating, setSmartGenerating] = createSignal(false)
   const [smartError, setSmartError] = createSignal<string>()
+  const [newFileName, setNewFileName] = createSignal("")
+  const [newFileDirectory, setNewFileDirectory] = createSignal("references")
+  const [newFileError, setNewFileError] = createSignal<string>()
+  const [pendingAddFile, setPendingAddFile] = createSignal<((input: { path: string; content: string }) => void) | undefined>()
 
   const directory = createMemo(() => {
     if (params.dir) return decode64(params.dir) ?? ""
@@ -117,13 +154,13 @@ function SkillsContent() {
     () => {
       const skill = selectedSkill()
       if (!skill || mode() === "create") return
-      return { connection: server.current, directory: directory(), location: skill.location }
+      return { connection: server.current, directory: directory(), location: skill.location, file: selectedFile() }
     },
     (input) =>
       requestSkill<SkillFile>(input.connection, {
         path: "/skill/file",
         directory: input.directory,
-        query: { location: input.location },
+        query: { location: input.location, file: input.file },
       }),
   )
 
@@ -138,6 +175,8 @@ function SkillsContent() {
     const file = skillFile()
     if (!file) return
     setDraft(file.content)
+    setSelectedFile(file.path)
+    setSelectedDirectory(parentSkillDirectory(file.path))
     setActionError(undefined)
     setMessage(undefined)
   })
@@ -156,15 +195,34 @@ function SkillsContent() {
 
   const selectSkill = (skill: SkillInfo) => {
     setSelected(skill.name)
+    setSelectedFile("SKILL.md")
+    setSelectedDirectory("")
     setMode("view")
   }
 
+  const resetCreateForm = () => {
+    setCreateName("")
+    setCreateDescription("")
+    setCreateContent(skillDocumentDraft("", "", DEFAULT_CREATE_BODY))
+    setCreateFiles([])
+    setCreateSelectedFile("SKILL.md")
+    setCreateSelectedDirectory("")
+    setCreateSource(directory() ? "project" : "global")
+  }
+
   const startCreate = () => {
+    resetCreateForm()
     setMode("create")
     setSelected(undefined)
     setMessage(undefined)
     setActionError(undefined)
-    setCreateSource(directory() ? "project" : "global")
+  }
+
+  const cancelCreate = () => {
+    resetCreateForm()
+    setMode("view")
+    setMessage(undefined)
+    setActionError(undefined)
   }
 
   const startSmartCreate = () => {
@@ -175,31 +233,145 @@ function SkillsContent() {
     dialog.push(() => <SmartCreateDialog />)
   }
 
+  const startAddFile = (handler: (input: { path: string; content: string }) => void, directory: string) => {
+    setNewFileName(defaultSkillFileName(directory))
+    setNewFileDirectory(directory)
+    setNewFileError(undefined)
+    setPendingAddFile(() => handler)
+    dialog.push(() => <NewSkillFileDialog />)
+  }
+
+  const submitNewFile = () => {
+    const file = normalizeSkillDraftPath([newFileDirectory(), newFileName()].filter(Boolean).join("/"))
+    if (!file) {
+      setNewFileError("请输入有效的文件名。")
+      return
+    }
+    pendingAddFile()?.({ path: file, content: skillFileTemplate(file) })
+    setPendingAddFile(undefined)
+    dialog.close()
+  }
+
+  const createTreeFiles = createMemo(() => [{ path: "SKILL.md", type: "file" as const }, ...createFiles().map((item) => ({ path: item.path, type: item.type }))])
+  const createActiveFile = createMemo(() => {
+    if (createSelectedFile() === "SKILL.md") {
+      return { path: "SKILL.md", type: "file" as const, content: createContent() }
+    }
+    return createFiles().find((item) => item.path === createSelectedFile()) ?? { path: "SKILL.md", type: "file" as const, content: createContent() }
+  })
+  const selectCreateFile = (file: string) => {
+    setCreateSelectedFile(file)
+    setCreateSelectedDirectory(parentSkillDirectory(file))
+  }
+  const selectExistingFile = (file: string) => {
+    setSelectedFile(file)
+    setSelectedDirectory(parentSkillDirectory(file))
+  }
+  const setCreateNameSynced = (name: string) => {
+    setCreateName(name)
+    setCreateContent((content) => syncSkillFrontmatter(content, name, createDescription()))
+  }
+  const setCreateDescriptionSynced = (description: string) => {
+    setCreateDescription(description)
+    setCreateContent((content) => syncSkillFrontmatter(content, createName(), description))
+  }
+  const setCreateSkillContent = (content: string) => {
+    setCreateContent(content)
+    const metadata = parseSkillFrontmatter(content)
+    if (metadata?.name !== undefined) setCreateName(metadata.name)
+    if (metadata?.description !== undefined) setCreateDescription(metadata.description)
+  }
+  const setCreateActiveContent = (content: string) => {
+    if (createSelectedFile() === "SKILL.md") {
+      setCreateSkillContent(content)
+      return
+    }
+    setCreateFiles((files) => files.map((item) => item.path === createSelectedFile() ? { ...item, content } : item))
+  }
+
+  const addCreateFile = (input: { path: string; content: string }) => {
+    const file = normalizeSkillDraftPath(input.path)
+    if (!file) {
+      setActionError("文件路径无效。")
+      return
+    }
+    if (file === "SKILL.md" || createFiles().some((item) => item.path === file)) {
+      setActionError("文件已存在。")
+      setCreateSelectedFile(file)
+      setCreateSelectedDirectory(parentSkillDirectory(file))
+      return
+    }
+    setCreateFiles((files) => [...files, { path: file, type: "file", content: input.content }])
+    setCreateSelectedFile(file)
+    setCreateSelectedDirectory(parentSkillDirectory(file))
+    setActionError(undefined)
+  }
+
+  const addExistingSkillFile = async (input: { path: string; content: string }) => {
+    const skill = selectedSkill()
+    if (!skill) return
+    const file = normalizeSkillDraftPath(input.path)
+    if (!file) {
+      setActionError("文件路径无效。")
+      return
+    }
+    setBusy(true)
+    setActionError(undefined)
+    setMessage(undefined)
+    try {
+      await requestSkill<SkillInfo>(server.current, {
+        path: "/skill",
+        method: "PATCH",
+        directory: directory(),
+        payload: { location: skill.location, file, content: input.content },
+      })
+      setSelectedFile(file)
+      setSelectedDirectory(parentSkillDirectory(file))
+      await refetchSkillFile()
+      setMode("edit")
+      setMessage("已添加技能文件。")
+    } catch (err) {
+      setActionError(errorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const smartCreate = async () => {
     const name = smartName().trim()
+    const description = smartDescription().trim()
     if (!name) {
       setSmartError("请输入技能名称。")
+      return
+    }
+    if (!description) {
+      setSmartError("请输入技能需求。")
+      return
+    }
+    if (description.length < MIN_SMART_DESCRIPTION_LENGTH) {
+      setSmartError(`技能需求至少需要 ${MIN_SMART_DESCRIPTION_LENGTH} 个字符。`)
       return
     }
     setSmartGenerating(true)
     setSmartError(undefined)
     try {
-      const result = await requestSkill<{ content: string }>(server.current, {
+      const result = await requestSkill<GeneratedSkill>(server.current, {
         path: "/skill/generate",
         method: "POST",
         directory: directory() || undefined,
         payload: {
           name,
-          description: smartDescription().trim() || undefined,
+          description,
         },
       })
       if (!result?.content) {
         setSmartError("AI 返回了空内容，请重试。")
         return
       }
-      setCreateName(name)
-      setCreateDescription(smartDescription().trim())
-      setCreateContent(result.content)
+      const generatedName = result.name || name
+      setCreateName(generatedName)
+      setCreateDescription(result.description)
+      setCreateContent(skillDocumentDraft(generatedName, result.description, markdownBody(result.content) || result.content))
       dialog.close()
       setMode("create")
       setSelected(undefined)
@@ -228,7 +400,7 @@ function SkillsContent() {
         path: "/skill",
         method: "PATCH",
         directory: directory(),
-        payload: { location: skill.location, content: draft() },
+        payload: { location: skill.location, file: selectedFile(), content: draft() },
       })
       await refresh(updated.name)
       await refetchSkillFile()
@@ -255,10 +427,12 @@ function SkillsContent() {
           name: createName().trim(),
           ...(description ? { description } : {}),
           source: createSource(),
-          content: createContent(),
+          content: syncSkillFrontmatter(createContent(), createName().trim(), description),
+          files: createFiles().map((item) => ({ path: item.path, content: item.content })),
         },
       })
       await refresh(created.name)
+      resetCreateForm()
       setMode("view")
       setMessage("已创建技能。")
     } catch (err) {
@@ -295,7 +469,7 @@ function SkillsContent() {
 
   function SmartCreateDialog() {
     return (
-      <Dialog title="智能创建技能" size="x-large">
+      <Dialog title="智能生成技能" size="x-large">
         <div class="flex flex-col gap-6 px-2 pb-2 pt-1">
           <div class="rounded-[8px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-4 py-3">
             <div class="flex items-start gap-3">
@@ -305,7 +479,7 @@ function SkillsContent() {
               <div class="min-w-0">
                 <p class="text-[13px] font-[530] text-[var(--v2-text-text-base)]">AI 智能生成</p>
                 <p class="mt-0.5 text-[12px] leading-relaxed text-[var(--v2-text-text-muted)]">
-                  输入名称和简介，AI 将自动生成完整的 SKILL.md 并填充到创建表单中
+                  输入名称和技能需求，AI 会生成简介和正文，并填充到创建表单中
                 </p>
               </div>
             </div>
@@ -320,8 +494,8 @@ function SkillsContent() {
                   <span class="size-2 rounded-full bg-[var(--v2-blue-400)] animate-pulse" style="animation-delay:400ms" />
                 </span>
                 <div class="text-center">
-                  <p class="text-[13px] font-[530] text-[var(--v2-text-text-base)]">AI 正在生成 SKILL.md...</p>
-                  <p class="mt-1 text-[12px] text-[var(--v2-text-text-muted)]">正在调用模型为 "{smartName()}" 生成完整技能文档，请稍候</p>
+                  <p class="text-[13px] font-[530] text-[var(--v2-text-text-base)]">AI 正在生成 SKILL.md</p>
+                  <p class="mt-1 text-[12px] text-[var(--v2-text-text-muted)]">正在调用模型生成技能草稿，请稍候</p>
                 </div>
               </div>
             </Show>
@@ -336,7 +510,7 @@ function SkillsContent() {
                 autofocus
                 value={smartName()}
                 onInput={(event) => setSmartName(event.currentTarget.value)}
-                placeholder="输入技能名称，如 my-skill"
+                placeholder="例如：database-migration-review"
                 disabled={smartGenerating()}
                 class={inputClass()}
                 onKeyDown={(event) => {
@@ -346,17 +520,20 @@ function SkillsContent() {
             </label>
 
             <label class="flex flex-col gap-1.5">
-              <span class="text-[12px] font-[530] text-[var(--v2-text-text-base)]">简介</span>
+              <span class="text-[12px] font-[530] text-[var(--v2-text-text-base)]">
+                技能需求
+                <span class="ml-0.5 text-[var(--v2-red-400)]">*</span>
+              </span>
               <textarea
                 value={smartDescription()}
                 onInput={(event) => setSmartDescription(event.currentTarget.value)}
-                placeholder="描述这个技能的功能、使用场景和触发条件"
+                placeholder="描述这个技能的功能、使用场景、触发条件和期望输出"
                 disabled={smartGenerating()}
                 rows={4}
                 class={inputClass() + " min-h-[80px] resize-none py-2 leading-relaxed"}
               />
               <span class="text-[11px] text-[var(--v2-text-text-faint)]">
-                可选的补充说明，帮助 AI 更准确地生成技能内容
+                至少 {MIN_SMART_DESCRIPTION_LENGTH} 个字符
               </span>
             </label>
             </Show>
@@ -381,7 +558,11 @@ function SkillsContent() {
             <button
               type="button"
               onClick={smartCreate}
-              disabled={smartGenerating() || !smartName().trim()}
+              disabled={
+                smartGenerating() ||
+                !smartName().trim() ||
+                smartDescription().trim().length < MIN_SMART_DESCRIPTION_LENGTH
+              }
               class={primaryButton()}
             >
               <Show
@@ -392,15 +573,63 @@ function SkillsContent() {
                   </span>
                 }
               >
-                <span class="inline-flex items-center gap-1.5">
-                  <span class="inline-flex gap-0.5">
-                    <span class="size-1 rounded-full bg-current opacity-60 animate-pulse" style="animation-delay:0ms" />
-                    <span class="size-1 rounded-full bg-current opacity-60 animate-pulse" style="animation-delay:150ms" />
-                    <span class="size-1 rounded-full bg-current opacity-60 animate-pulse" style="animation-delay:300ms" />
-                  </span>
-                  正在生成...
-                </span>
+                <span class="inline-flex items-center gap-1.5">正在生成</span>
               </Show>
+            </button>
+          </div>
+        </div>
+      </Dialog>
+    )
+  }
+
+  function NewSkillFileDialog() {
+    return (
+      <Dialog title="新建文件" size="normal">
+        <div class="flex flex-col gap-4 px-2 pb-2 pt-1">
+          <label class="flex flex-col gap-1.5">
+            <span class="text-[12px] font-[530] text-[var(--v2-text-text-base)]">创建位置</span>
+            <div class="h-8 rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-3 font-mono text-[12px] leading-8 text-[var(--v2-text-text-muted)]">
+              {newFileDirectory() || "技能根目录"}
+            </div>
+          </label>
+          <label class="flex flex-col gap-1.5">
+            <span class="text-[12px] font-[530] text-[var(--v2-text-text-base)]">文件名</span>
+            <input
+              autofocus
+              value={newFileName()}
+              onInput={(event) => {
+                setNewFileName(event.currentTarget.value)
+                setNewFileError(undefined)
+              }}
+              placeholder={defaultSkillFileName(newFileDirectory())}
+              class={inputClass()}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault()
+                  submitNewFile()
+                }
+              }}
+            />
+            <span class="text-[11px] text-[var(--v2-text-text-faint)]">先在左侧文件树选择目录，再创建文件。</span>
+          </label>
+          <Show when={newFileError()}>
+            <div class="rounded-[6px] border border-[var(--v2-red-400)]/40 bg-[var(--v2-red-400)]/10 px-3 py-2 text-[12px] text-[var(--v2-text-text-base)]">
+              {newFileError()}
+            </div>
+          </Show>
+          <div class="flex items-center justify-end gap-2.5 border-t border-[var(--v2-border-border-base)] pt-4">
+            <button
+              type="button"
+              onClick={() => {
+                setPendingAddFile(undefined)
+                dialog.close()
+              }}
+              class={secondaryButton()}
+            >
+              取消
+            </button>
+            <button type="button" onClick={submitNewFile} disabled={!newFileName().trim()} class={primaryButton()}>
+              创建
             </button>
           </div>
         </div>
@@ -413,15 +642,16 @@ function SkillsContent() {
       <div class="shrink-0 border-b border-[var(--v2-border-border-base)] px-5 pb-3 pt-4">
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">
-            <h1 class="text-[16px] font-[530] leading-8 text-[var(--v2-text-text-base)]">技能</h1>
+            <div>
+              <h1 class="text-[16px] font-[530] leading-8 text-[var(--v2-text-text-base)]">技能库</h1>
+              <p class="text-[12px] leading-5 text-[var(--v2-text-text-muted)]">管理当前项目与全局可用的技能能力</p>
+            </div>
           </div>
-          <button
-            type="button"
-            onClick={startCreate}
-            class="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-3 text-[12px] font-[530] text-[var(--v2-text-text-base)] transition-colors hover:bg-[var(--v2-background-bg-layer-02)]"
-          >
-            新建技能
-          </button>
+          <Show when={mode() === "view"}>
+            <button type="button" onClick={startCreate} class={secondaryButton()}>
+              新建技能
+            </button>
+          </Show>
         </div>
       </div>
 
@@ -477,11 +707,7 @@ function SkillsContent() {
               <Match when={data.error}>
                 <div class="flex flex-col items-center gap-3 py-8">
                   <p class="text-[13px] text-[var(--v2-text-text-muted)]">无法读取技能列表。</p>
-                  <button
-                    type="button"
-                    onClick={() => void refetch()}
-                    class="rounded-[6px] bg-[var(--v2-background-bg-layer-01)] px-3 py-1.5 text-[13px] text-[var(--v2-text-text-base)] transition-colors hover:bg-[var(--v2-background-bg-layer-02)]"
-                  >
+                  <button type="button" onClick={() => void refetch()} class={secondaryButton()}>
                     重试
                   </button>
                 </div>
@@ -498,7 +724,6 @@ function SkillsContent() {
                     {(skill) => {
                       const active = () => mode() !== "create" && selectedSkill()?.name === skill.name
                       const currentSource = () => skillSource(skill, directory())
-                      const currentCategory = () => skillCategory(skill, directory())
                       return (
                         <button
                           type="button"
@@ -506,7 +731,7 @@ function SkillsContent() {
                           classList={{
                             "border-transparent bg-transparent hover:border-[var(--v2-border-border-base)] hover:bg-[var(--v2-background-bg-layer-01)]":
                               !active(),
-                            "border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)]": active(),
+                            "border-[var(--v2-blue-400)]/30 bg-[var(--v2-blue-400)]/5": active(),
                           }}
                           onClick={() => selectSkill(skill)}
                         >
@@ -522,14 +747,6 @@ function SkillsContent() {
                           <p class="mt-1 line-clamp-2 text-[11px] leading-snug text-[var(--v2-text-text-muted)]">
                             {skill.description || "没有描述"}
                           </p>
-                          <div class="mt-1 flex min-w-0 items-center gap-1.5">
-                            <span class="shrink-0 text-[10px] text-[var(--v2-text-text-muted)]">
-                              {SKILL_CATEGORY_LABELS[currentCategory()]}
-                            </span>
-                            <span class="min-w-0 truncate font-mono text-[10px] text-[var(--v2-text-text-faint)]">
-                              {skillDirectory(skill)}
-                            </span>
-                          </div>
                         </button>
                       )
                     }}
@@ -557,17 +774,27 @@ function SkillsContent() {
               source={selectedSource()}
               directory={directory()}
               file={skillFile()}
+              selectedFile={selectedFile()}
+              setSelectedFile={selectExistingFile}
+              selectedDirectory={selectedDirectory()}
+              setSelectedDirectory={setSelectedDirectory}
               fileLoading={skillFile.loading}
               draft={draft()}
               setDraft={setDraft}
               createName={createName()}
-              setCreateName={setCreateName}
+              setCreateName={setCreateNameSynced}
               createDescription={createDescription()}
-              setCreateDescription={setCreateDescription}
+              setCreateDescription={setCreateDescriptionSynced}
               createSource={createSource()}
               setCreateSource={setCreateSource}
               createContent={createContent()}
-              setCreateContent={setCreateContent}
+              setCreateContent={setCreateSkillContent}
+              createFiles={createTreeFiles()}
+              createActiveFile={createActiveFile()}
+              setCreateSelectedFile={selectCreateFile}
+              createSelectedDirectory={createSelectedDirectory()}
+              setCreateSelectedDirectory={setCreateSelectedDirectory}
+              setCreateActiveContent={setCreateActiveContent}
               canCreateProject={!!directory()}
               busy={busy()}
               message={message()}
@@ -576,6 +803,9 @@ function SkillsContent() {
               onCreate={create}
               onDelete={remove}
               onSmartCreate={startSmartCreate}
+              onCancelCreate={cancelCreate}
+              onAddCreateFile={() => startAddFile(addCreateFile, createSelectedDirectory() || "references")}
+              onAddExistingFile={() => startAddFile(addExistingSkillFile, selectedDirectory())}
             />
           </Show>
         </div>
@@ -606,9 +836,155 @@ function SourceTab(props: { active: boolean; disabled?: boolean; onClick: () => 
 
 function SourceBadge(props: { source: SkillSource }) {
   return (
-    <span class="shrink-0 rounded-[3px] bg-[var(--v2-blue-400)]/10 px-1.5 py-px text-[10px] font-[530] leading-snug text-[var(--v2-blue-500)]">
+    <span
+      class="shrink-0 rounded-[3px] px-1.5 py-px text-[10px] font-[530] leading-snug"
+      classList={{
+        "bg-[var(--v2-blue-400)]/10 text-[var(--v2-blue-500)]": props.source === "project",
+        "bg-[var(--v2-green-400)]/10 text-[var(--v2-green-600)]": props.source === "global",
+        "bg-[var(--v2-background-bg-layer-02)] text-[var(--v2-text-text-muted)]": props.source === "built-in",
+      }}
+    >
       {SKILL_SOURCE_LABELS[props.source]}
     </span>
+  )
+}
+
+type SkillTreeEntry = {
+  path: string
+  label: string
+  depth: number
+  type: "directory" | "file"
+}
+
+const DEFAULT_SKILL_DIRECTORIES = ["references", "scripts", "assets"]
+
+function normalizeSkillDraftPath(value: string) {
+  const normalized = value.trim().replaceAll("\\", "/").replace(/^\/+/, "")
+  if (!normalized || normalized.includes("\0")) return
+  const parts = normalized.split("/").filter((part) => part && part !== ".")
+  if (parts.length === 0 || parts.some((part) => part === "..")) return
+  return parts.join("/")
+}
+
+function skillFileTemplate(file: string) {
+  if (file.startsWith("references/") && isMarkdownFile(file)) return `# ${file.split("/").at(-1)?.replace(/\.md$/i, "") ?? "Reference"}\n\n`
+  if (file.startsWith("scripts/")) return "#!/usr/bin/env bash\nset -euo pipefail\n\n"
+  if (file.startsWith("assets/") && isMarkdownFile(file)) return "# Asset\n\n"
+  return ""
+}
+
+function parentSkillDirectory(file: string) {
+  const parts = normalizeSkillDraftPath(file)?.split("/") ?? []
+  if (parts.length <= 1) return ""
+  return parts.slice(0, -1).join("/")
+}
+
+function defaultSkillFileName(directory: string) {
+  if (directory.startsWith("scripts")) return "script.sh"
+  if (directory.startsWith("assets")) return "template.md"
+  return "notes.md"
+}
+
+function skillTreeEntries(files: { path: string; type: "file" }[], showEmptyDirs: boolean) {
+  const entries = new Map<string, SkillTreeEntry>()
+  if (showEmptyDirs) {
+    DEFAULT_SKILL_DIRECTORIES.forEach((dir) => {
+      entries.set(dir, {
+        path: dir,
+        label: dir,
+        depth: 0,
+        type: "directory",
+      })
+    })
+  }
+  files.forEach((file) => {
+    const parts = file.path.split("/").filter(Boolean)
+    parts.slice(0, -1).forEach((_, index) => {
+      const dir = parts.slice(0, index + 1).join("/")
+      if (!entries.has(dir)) {
+        entries.set(dir, {
+          path: dir,
+          label: parts[index] ?? dir,
+          depth: index,
+          type: "directory",
+        })
+      }
+    })
+    entries.set(file.path, {
+      path: file.path,
+      label: parts.at(-1) ?? file.path,
+      depth: Math.max(0, parts.length - 1),
+      type: "file",
+    })
+  })
+  return Array.from(entries.values()).toSorted((a, b) => {
+    if (a.path === "SKILL.md") return -1
+    if (b.path === "SKILL.md") return 1
+    return a.path.localeCompare(b.path)
+  })
+}
+
+function isMarkdownFile(file: string) {
+  return file.toLowerCase().endsWith(".md") || file.toLowerCase().endsWith(".markdown")
+}
+
+function SkillFileTree(props: {
+  files: { path: string; type: "file" }[]
+  active: string
+  activeDirectory: string
+  onSelect: (path: string) => void
+  onSelectDirectory: (path: string) => void
+  onAddFile?: () => void
+  canAdd?: boolean
+  showEmptyDirs?: boolean
+}) {
+  const entries = createMemo(() => skillTreeEntries(props.files, props.showEmptyDirs ?? false))
+  const directoryHasFiles = (directory: string) => props.files.some((file) => file.path.startsWith(`${directory}/`))
+  const selectEntry = (entry: SkillTreeEntry) => {
+    if (entry.type === "directory") {
+      props.onSelectDirectory(entry.path)
+      return
+    }
+    props.onSelect(entry.path)
+  }
+  return (
+    <div class="h-full w-[220px] shrink-0 overflow-y-auto border-r border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-base)] p-2">
+      <div class="mb-2 flex h-7 items-center justify-between px-2">
+        <span class="text-[11px] font-[530] text-[var(--v2-text-text-muted)]">文件</span>
+        <Show when={props.canAdd && props.onAddFile}>
+          <button
+            type="button"
+            onClick={() => props.onAddFile?.()}
+            class="flex size-6 items-center justify-center rounded-[5px] text-[var(--v2-text-text-muted)] transition-colors hover:bg-[var(--v2-background-bg-layer-02)] hover:text-[var(--v2-text-text-base)]"
+            title="在选中目录中新建文件"
+            aria-label="新建文件"
+          >
+            <Icon name="plus" size="small" class="size-3.5" />
+          </button>
+        </Show>
+      </div>
+      <For each={entries()}>
+        {(entry) => (
+          <button
+            type="button"
+            onClick={() => selectEntry(entry)}
+            class="flex h-7 w-full items-center gap-1.5 rounded-[5px] px-2 text-left text-[12px] transition-colors"
+            style={{ "padding-left": `${8 + entry.depth * 14}px` }}
+            classList={{
+              "text-[var(--v2-text-text-muted)] hover:bg-[var(--v2-background-bg-layer-02)]": entry.type === "directory" && entry.path !== props.activeDirectory && directoryHasFiles(entry.path),
+              "text-[var(--v2-text-text-faint)] hover:bg-[var(--v2-background-bg-layer-02)] hover:text-[var(--v2-text-text-muted)]": entry.type === "directory" && entry.path !== props.activeDirectory && !directoryHasFiles(entry.path),
+              "border border-[var(--v2-blue-400)]/45 bg-[var(--v2-blue-400)]/10 text-[var(--v2-blue-600)]": entry.type === "directory" && entry.path === props.activeDirectory,
+              "text-[var(--v2-text-text-base)] hover:bg-[var(--v2-background-bg-layer-02)]": entry.type === "file" && entry.path !== props.active,
+              "bg-[var(--v2-background-bg-layer-02)] text-[var(--v2-text-text-base)]": entry.type === "file" && entry.path === props.active,
+            }}
+            title={entry.type === "directory" ? `${directoryHasFiles(entry.path) ? "" : "空目录，"}新文件将创建到 ${entry.path}` : entry.path}
+          >
+            <Icon name={entry.type === "directory" ? "folder" : "mcp"} size="small" class="size-3.5 shrink-0 text-[var(--v2-text-text-faint)]" />
+            <span class="min-w-0 truncate">{entry.label}</span>
+          </button>
+        )}
+      </For>
+    </div>
   )
 }
 
@@ -619,6 +995,10 @@ function SkillDetail(props: {
   source: SkillSource
   directory: string
   file?: SkillFile
+  selectedFile: string
+  setSelectedFile: (value: string) => void
+  selectedDirectory: string
+  setSelectedDirectory: (value: string) => void
   fileLoading: boolean
   draft: string
   setDraft: (value: string) => void
@@ -630,6 +1010,12 @@ function SkillDetail(props: {
   setCreateSource: (value: SkillCreateSource) => void
   createContent: string
   setCreateContent: (value: string) => void
+  createFiles: { path: string; type: "file" }[]
+  createActiveFile: DraftSkillFile
+  setCreateSelectedFile: (value: string) => void
+  createSelectedDirectory: string
+  setCreateSelectedDirectory: (value: string) => void
+  setCreateActiveContent: (value: string) => void
   canCreateProject: boolean
   busy: boolean
   message?: string
@@ -638,9 +1024,27 @@ function SkillDetail(props: {
   onCreate: () => void
   onDelete: () => void
   onSmartCreate: () => void
+  onCancelCreate: () => void
+  onAddCreateFile: () => void
+  onAddExistingFile: () => void
 }) {
+  const [copied, setCopied] = createSignal(false)
   const builtin = () => props.skill?.location === "<built-in>"
   const editable = () => props.file?.editable === true && !builtin()
+  const activeFile = () => props.file?.path ?? props.selectedFile
+  const activeFileMarkdown = () => isMarkdownFile(activeFile())
+
+  const copySkillPath = async () => {
+    const skill = props.skill
+    if (!skill || builtin()) return
+    try {
+      await navigator.clipboard.writeText(skill.location)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // clipboard not available
+    }
+  }
 
   return (
     <div class="flex h-full min-w-0 flex-1 flex-col">
@@ -653,14 +1057,19 @@ function SkillDetail(props: {
                 <h2 class="truncate text-[18px] font-[530] text-[var(--v2-text-text-base)]">新建技能</h2>
                 <p class="mt-1 text-[12px] text-[var(--v2-text-text-muted)]">创建后会立即重新加载技能列表。</p>
               </div>
-              <div class="flex shrink-0 items-center" style="gap: 1rem">
-                <button type="button" onClick={props.onSmartCreate} disabled={props.busy} class={secondaryButton()}>
-                  智能创建
+              <div class="flex shrink-0 items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={props.onSmartCreate}
+                  disabled={props.busy}
+                  class={secondaryButton()}
+                >
+                  智能生成
                 </button>
-                <button type="button" onClick={props.onCreate} disabled={props.busy || !props.createName.trim()} class={secondaryButton()}>
+                <button type="button" onClick={props.onCreate} disabled={props.busy || !props.createName.trim()} class={primaryButton()}>
                   创建
                 </button>
-                <button type="button" onClick={() => props.setMode("view")} class={secondaryButton()}>
+                <button type="button" onClick={props.onCancelCreate} class={secondaryButton()}>
                   取消
                 </button>
               </div>
@@ -673,10 +1082,20 @@ function SkillDetail(props: {
                 <h2 class="truncate text-[18px] font-[530] text-[var(--v2-text-text-base)]">{props.skill?.name}</h2>
                 <SourceBadge source={props.source} />
               </div>
+              <p class="mt-1 line-clamp-2 text-[12px] leading-5 text-[var(--v2-text-text-muted)]">
+                {props.skill?.description || "没有描述"}
+              </p>
+              <Show when={props.skill}>
+                {(skill) => (
+                  <p class="mt-1 truncate font-mono text-[10px] text-[var(--v2-text-text-faint)]" title={skill().location}>
+                    {skill().location}
+                  </p>
+                )}
+              </Show>
             </div>
-            <div class="flex shrink-0 items-center gap-4">
+            <div class="flex shrink-0 items-center gap-2.5">
               <Show when={props.mode === "edit"}>
-                <button type="button" onClick={props.onSave} disabled={props.busy} class={secondaryButton()}>
+                <button type="button" onClick={props.onSave} disabled={props.busy} class={primaryButton()}>
                   保存
                 </button>
                 <button type="button" onClick={() => props.setMode("view")} disabled={props.busy} class={secondaryButton()}>
@@ -684,12 +1103,15 @@ function SkillDetail(props: {
                 </button>
               </Show>
               <Show when={editable() && props.mode === "view"}>
+                <button type="button" onClick={copySkillPath} class={secondaryButton()}>
+                  {copied() ? "已复制" : "复制路径"}
+                </button>
                 <button type="button" onClick={() => props.setMode("edit")} class={secondaryButton()}>
                   编辑
                 </button>
               </Show>
               <Show when={editable() && props.mode === "view"}>
-                <button type="button" onClick={props.onDelete} disabled={props.busy} class={dangerButton()}>
+                <button type="button" onClick={props.onDelete} disabled={props.busy} class={secondaryButton() + " hover:border-[var(--v2-red-400)]/40 hover:bg-[var(--v2-red-400)]/10 hover:text-[var(--v2-red-600)]"}>
                   删除
                 </button>
               </Show>
@@ -724,7 +1146,7 @@ function SkillDetail(props: {
                 </div>
               </Show>
               <div class="flex min-w-0 flex-col">
-                <Section title="基本信息" class="shrink-0">
+                <Section title="元数据" class="shrink-0">
                   <div class="grid gap-3 md:grid-cols-2">
                     <label class="flex min-w-0 flex-col gap-1.5">
                       <span class="text-[12px] text-[var(--v2-text-text-muted)]">名称</span>
@@ -758,15 +1180,45 @@ function SkillDetail(props: {
                       class={inputClass()}
                     />
                   </label>
+                  <p class="mt-2 text-[11px] leading-relaxed text-[var(--v2-text-text-faint)]">
+                    名称和描述会同步到 SKILL.md frontmatter；其他高级字段可直接在 SKILL.md 顶部 YAML 中编辑。
+                  </p>
                 </Section>
 
-                <Section title="Markdown 内容" class="min-h-[320px]">
-                  <MarkdownEditorPreview
-                    value={props.createContent}
-                    onInput={props.setCreateContent}
-                    preview={props.createContent}
-                    cacheKey={`skill-create-preview:${props.createName}:${props.createContent}`}
-                  />
+                <Section title="技能文件" class="min-h-[320px]">
+                  <div class="flex h-[calc(100vh-235px)] min-h-[320px] overflow-hidden rounded-[7px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)]">
+                    <SkillFileTree
+                      files={props.createFiles}
+                      active={props.createActiveFile.path}
+                      activeDirectory={props.createSelectedDirectory}
+                      onSelect={props.setCreateSelectedFile}
+                      onSelectDirectory={props.setCreateSelectedDirectory}
+                      onAddFile={props.onAddCreateFile}
+                      canAdd
+                      showEmptyDirs
+                    />
+                    <div class="min-w-0 flex-1">
+                      <Show
+                        when={isMarkdownFile(props.createActiveFile.path)}
+                        fallback={
+                          <textarea
+                            value={props.createActiveFile.content}
+                            onInput={(event) => props.setCreateActiveContent(event.currentTarget.value)}
+                            spellcheck={false}
+                            class="h-full w-full resize-none border-0 bg-transparent p-4 font-mono text-[12px] leading-5 text-[var(--v2-text-text-base)] outline-none placeholder:text-[var(--v2-text-text-faint)]"
+                          />
+                        }
+                      >
+                        <MarkdownEditorPreview
+                          value={props.createActiveFile.content}
+                          onInput={props.setCreateActiveContent}
+                          preview={props.createActiveFile.path === "SKILL.md" ? markdownBody(props.createContent) : props.createActiveFile.content}
+                          cacheKey={`skill-create-preview:${props.createName}:${props.createActiveFile.path}:${props.createActiveFile.content}`}
+                          framed={false}
+                        />
+                      </Show>
+                    </div>
+                  </div>
                 </Section>
               </div>
             </div>
@@ -776,35 +1228,66 @@ function SkillDetail(props: {
             {(skill) => (
               <div class="flex min-w-0 flex-col">
                 <div class="flex min-w-0 flex-col">
-                  <Section title="文件位置" class="shrink-0">
-                    <div class="grid gap-2 rounded-[7px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] p-3">
-                      <MetaRow label="目录" value={skillDirectory(skill())} mono />
-                      <MetaRow label="文件" value={skill().location} mono />
+                  <Show
+                    when={!props.fileLoading}
+                    fallback={<div class="h-[calc(100vh-265px)] min-h-[320px] animate-pulse rounded-[7px] bg-[var(--v2-background-bg-layer-01)]" />}
+                  >
+                    <div class="flex h-[calc(100vh-265px)] min-h-[320px] overflow-hidden rounded-[7px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)]">
+                      <SkillFileTree
+                        files={props.file?.files ?? [{ path: "SKILL.md", type: "file" }]}
+                        active={activeFile()}
+                        activeDirectory={props.selectedDirectory}
+                        onSelect={props.setSelectedFile}
+                        onSelectDirectory={props.setSelectedDirectory}
+                        onAddFile={props.onAddExistingFile}
+                        canAdd={editable() && props.mode === "edit"}
+                        showEmptyDirs={props.mode === "edit"}
+                      />
+                      <div class="min-w-0 flex-1">
+                        <Show
+                          when={props.mode === "edit"}
+                          fallback={
+                            <Show
+                              when={activeFileMarkdown()}
+                              fallback={
+                                <pre class="h-full overflow-y-auto whitespace-pre-wrap break-words p-4 text-[12px] leading-5 text-[var(--v2-text-text-base)]">
+                                  <code>{props.file?.content || `${activeFile()} 内容为空。`}</code>
+                                </pre>
+                              }
+                            >
+                              <div class="h-full overflow-y-auto p-4">
+                                <Markdown
+                                  text={activeFile() === "SKILL.md" ? markdownBody(props.file?.content ?? "") : (props.file?.content ?? " ")}
+                                  cacheKey={`skill-view-preview:${skill().location}:${activeFile()}:${props.file?.content ?? ""}`}
+                                  class="text-[13px] leading-relaxed text-[var(--v2-text-text-base)]"
+                                />
+                              </div>
+                            </Show>
+                          }
+                        >
+                          <Show
+                            when={activeFileMarkdown()}
+                            fallback={
+                              <textarea
+                                value={props.draft}
+                                onInput={(event) => props.setDraft(event.currentTarget.value)}
+                                spellcheck={false}
+                                class="h-full w-full resize-none border-0 bg-transparent p-4 font-mono text-[12px] leading-5 text-[var(--v2-text-text-base)] outline-none placeholder:text-[var(--v2-text-text-faint)]"
+                              />
+                            }
+                          >
+                            <MarkdownEditorPreview
+                              value={props.draft}
+                              onInput={props.setDraft}
+                              preview={activeFile() === "SKILL.md" ? markdownBody(props.draft) : props.draft}
+                              cacheKey={`skill-edit-preview:${skill().location}:${activeFile()}:${props.draft}`}
+                              framed={false}
+                            />
+                          </Show>
+                        </Show>
+                      </div>
                     </div>
-                  </Section>
-
-                  <Section title={props.mode === "edit" ? "编辑 SKILL.md" : "SKILL.md"} class="min-h-[320px]">
-                    <Show
-                      when={!props.fileLoading}
-                      fallback={<div class="h-[calc(100vh-370px)] min-h-[320px] animate-pulse rounded-[7px] bg-[var(--v2-background-bg-layer-01)]" />}
-                    >
-                      <Show
-                        when={props.mode === "edit"}
-                        fallback={
-                          <pre class="h-[calc(100vh-370px)] min-h-[320px] overflow-y-auto whitespace-pre-wrap break-words rounded-[7px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] p-4 text-[12px] leading-5 text-[var(--v2-text-text-base)]">
-                            <code>{props.file?.content || "SKILL.md 内容为空。"}</code>
-                          </pre>
-                        }
-                      >
-                        <MarkdownEditorPreview
-                          value={props.draft}
-                          onInput={props.setDraft}
-                          preview={markdownBody(props.draft)}
-                          cacheKey={`skill-edit-preview:${skill().location}:${props.draft}`}
-                        />
-                      </Show>
-                    </Show>
-                  </Section>
+                  </Show>
                 </div>
               </div>
             )}
@@ -820,6 +1303,7 @@ function MarkdownEditorPreview(props: {
   preview: string
   cacheKey: string
   onInput: (value: string) => void
+  framed?: boolean
 }) {
   const [split, setSplit] = createSignal(50)
   let containerRef: HTMLDivElement | undefined
@@ -863,35 +1347,56 @@ function MarkdownEditorPreview(props: {
   return (
     <div
       ref={containerRef}
-      class="flex h-[calc(100vh-290px)] min-h-[320px] overflow-hidden rounded-[7px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)]"
+      classList={{
+        "flex h-full min-h-[320px] flex-col overflow-hidden bg-[var(--v2-background-bg-layer-01)]": props.framed === false,
+        "flex h-[calc(100vh-290px)] min-h-[320px] flex-col overflow-hidden rounded-[7px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)]":
+          props.framed !== false,
+      }}
     >
-      <textarea
-        ref={editorRef}
-        value={props.value}
-        onInput={(event) => props.onInput(event.currentTarget.value)}
-        onScroll={onEditorScroll}
-        spellcheck={false}
-        style={{ width: `${split()}%` }}
-        class="min-h-0 resize-none border-0 bg-transparent p-4 font-mono text-[12px] leading-5 text-[var(--v2-text-text-base)] outline-none placeholder:text-[var(--v2-text-text-faint)]"
-        placeholder="编辑 SKILL.md…"
-      />
-      <div
-        class="flex shrink-0 cursor-col-resize items-center justify-center py-2"
-        onMouseDown={onDividerDown}
-      >
-        <div class="h-full w-px bg-[var(--v2-border-border-base)]" />
+      <div class="flex h-8 shrink-0 border-b border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-base)]">
+        <div
+          style={{ width: `${split()}%` }}
+          class="flex items-center px-4 text-[11px] font-[530] text-[var(--v2-text-text-muted)]"
+        >
+          编辑
+        </div>
+        <div class="w-px bg-[var(--v2-border-border-base)]" />
+        <div
+          style={{ width: `${100 - split()}%` }}
+          class="flex items-center px-4 text-[11px] font-[530] text-[var(--v2-text-text-muted)]"
+        >
+          预览
+        </div>
       </div>
-      <div
-        ref={previewRef}
-        onScroll={onPreviewScroll}
-        style={{ width: `${100 - split()}%` }}
-        class="min-h-0 min-w-0 overflow-y-auto p-4"
-      >
-        <Markdown
-          text={props.preview || " "}
-          cacheKey={props.cacheKey}
-          class="text-[13px] leading-relaxed text-[var(--v2-text-text-base)]"
+      <div class="flex min-h-0 flex-1">
+        <textarea
+          ref={editorRef}
+          value={props.value}
+          onInput={(event) => props.onInput(event.currentTarget.value)}
+          onScroll={onEditorScroll}
+          spellcheck={false}
+          style={{ width: `${split()}%` }}
+          class="h-full min-h-0 resize-none border-0 bg-transparent p-4 font-mono text-[12px] leading-5 text-[var(--v2-text-text-base)] outline-none placeholder:text-[var(--v2-text-text-faint)]"
+          placeholder="编辑 SKILL.md…"
         />
+        <div
+          class="flex shrink-0 cursor-col-resize items-center justify-center py-2"
+          onMouseDown={onDividerDown}
+        >
+          <div class="h-full w-px bg-[var(--v2-border-border-base)]" />
+        </div>
+        <div
+          ref={previewRef}
+          onScroll={onPreviewScroll}
+          style={{ width: `${100 - split()}%` }}
+          class="h-full min-h-0 min-w-0 overflow-y-auto p-4"
+        >
+          <Markdown
+            text={props.preview || " "}
+            cacheKey={props.cacheKey}
+            class="text-[13px] leading-relaxed text-[var(--v2-text-text-base)]"
+          />
+        </div>
       </div>
     </div>
   )
@@ -899,6 +1404,60 @@ function MarkdownEditorPreview(props: {
 
 function markdownBody(content: string) {
   return content.replace(/^---\s*\n[\s\S]*?\n---\s*\n?/, "").trim()
+}
+
+function skillDocumentDraft(name: string, description: string, body: string) {
+  return syncSkillFrontmatter(body, name, description)
+}
+
+function syncSkillFrontmatter(content: string, name: string, description: string) {
+  const parsed = splitSkillFrontmatter(content)
+  const body = parsed?.body ?? content
+  const lines = parsed?.frontmatter.split("\n") ?? []
+  const withName = upsertYamlString(lines, "name", name)
+  const withDescription = upsertYamlString(withName, "description", description)
+  return ["---", ...withDescription, "---", "", body.replace(/^\n+/, "")].join("\n")
+}
+
+function parseSkillFrontmatter(content: string) {
+  const parsed = splitSkillFrontmatter(content)
+  if (!parsed) return
+  return {
+    name: yamlStringValue(parsed.frontmatter, "name"),
+    description: yamlStringValue(parsed.frontmatter, "description"),
+  }
+}
+
+function splitSkillFrontmatter(content: string) {
+  const match = content.match(/^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/)
+  if (!match) return
+  return {
+    frontmatter: match[1] ?? "",
+    body: match[2] ?? "",
+  }
+}
+
+function upsertYamlString(lines: string[], key: "name" | "description", value: string) {
+  const next = [...lines]
+  const index = next.findIndex((line) => new RegExp(`^\\s*${key}\\s*:`).test(line))
+  const line = `${key}: ${JSON.stringify(value)}`
+  if (index >= 0) return next.map((item, itemIndex) => itemIndex === index ? line : item)
+  return [...next, line]
+}
+
+function yamlStringValue(frontmatter: string, key: "name" | "description") {
+  const line = frontmatter.split("\n").find((item) => new RegExp(`^\\s*${key}\\s*:`).test(item))
+  if (!line) return
+  const value = line.slice(line.indexOf(":") + 1).trim()
+  if (value.startsWith("\"") && value.endsWith("\"")) {
+    try {
+      return JSON.parse(value) as string
+    } catch {
+      return value.slice(1, -1)
+    }
+  }
+  if (value.startsWith("'") && value.endsWith("'")) return value.slice(1, -1).replaceAll("''", "'")
+  return value.replace(/\s+#.*$/, "")
 }
 
 function Section(props: { title: string; class?: string; children: JSX.Element }) {
@@ -915,21 +1474,6 @@ function Section(props: { title: string; class?: string; children: JSX.Element }
   )
 }
 
-function MetaRow(props: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div class="grid min-w-0 grid-cols-[64px_minmax(0,1fr)] gap-2 text-[12px]">
-      <div class="text-[var(--v2-text-text-muted)]">{props.label}</div>
-      <div
-        class="min-w-0 truncate text-[var(--v2-text-text-base)]"
-        classList={{ "font-mono text-[11px]": props.mono }}
-        title={props.value}
-      >
-        {props.value}
-      </div>
-    </div>
-  )
-}
-
 function inputClass() {
   return "h-8 min-w-0 rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-2.5 text-[13px] text-[var(--v2-text-text-base)] outline-none transition-colors placeholder:text-[var(--v2-text-text-faint)] focus:border-[var(--v2-blue-400)]"
 }
@@ -940,10 +1484,6 @@ function secondaryButton() {
 
 function primaryButton() {
   return "inline-flex h-8 items-center gap-1.5 rounded-[6px] bg-[var(--v2-text-text-base)] px-3 text-[12px] font-[530] text-[var(--v2-background-bg-base)] transition-opacity hover:opacity-90 disabled:opacity-50"
-}
-
-function dangerButton() {
-  return "inline-flex h-8 items-center gap-1.5 rounded-[6px] border border-[var(--v2-red-400)]/40 bg-[var(--v2-red-400)]/10 px-3 text-[12px] font-[530] text-[var(--v2-red-600)] transition-colors hover:bg-[var(--v2-red-400)]/15 disabled:cursor-not-allowed disabled:opacity-60"
 }
 
 function requestSkill<T>(

@@ -43,11 +43,19 @@ export class ApiVcsApplyError extends Schema.ErrorClass<ApiVcsApplyError>("VcsAp
 export const SkillFileQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
   location: Schema.String,
+  file: Schema.optional(Schema.String),
+})
+
+export const SkillFileEntry = Schema.Struct({
+  path: Schema.String,
+  type: Schema.Literals(["file"]),
 })
 
 export const SkillFileResult = Schema.Struct({
   content: Schema.String,
   editable: Schema.Boolean,
+  path: Schema.String,
+  files: Schema.Array(SkillFileEntry),
 })
 
 export const SkillCreatePayload = Schema.Struct({
@@ -55,10 +63,15 @@ export const SkillCreatePayload = Schema.Struct({
   description: Schema.optional(Schema.String),
   source: Schema.Literals(["project", "global"]),
   content: Schema.String,
+  files: Schema.optional(Schema.Array(Schema.Struct({
+    path: Schema.String,
+    content: Schema.String,
+  }))),
 })
 
 export const SkillWritePayload = Schema.Struct({
   location: Schema.String,
+  file: Schema.optional(Schema.String),
   content: Schema.String,
 })
 
@@ -72,7 +85,21 @@ export const SkillGeneratePayload = Schema.Struct({
 })
 
 export const SkillGenerateResult = Schema.Struct({
+  name: Schema.String,
+  description: Schema.String,
   content: Schema.String,
+})
+
+export const AgentGeneratePayload = Schema.Struct({
+  name: Schema.String,
+  description: Schema.optional(Schema.String),
+})
+
+export const AgentGenerateResult = Schema.Struct({
+  name: Schema.String,
+  description: Schema.String,
+  mode: Schema.Literals(["subagent", "primary", "all"]),
+  prompt: Schema.String,
 })
 
 export class ApiSkillManageError extends Schema.ErrorClass<ApiSkillManageError>("SkillManageError")(
@@ -96,6 +123,7 @@ export const InstancePaths = {
   vcsApply: "/vcs/apply",
   command: "/command",
   agent: "/agent",
+  agentGenerate: "/agent/generate",
   skill: "/skill",
   skillFile: "/skill/file",
   skillGenerate: "/skill/generate",
@@ -202,6 +230,18 @@ export const InstanceApi = HttpApi.make("instance")
             identifier: "app.agents",
             summary: "List agents",
             description: "Get a list of all available AI agents in the OpenCode system.",
+          }),
+        ),
+        HttpApiEndpoint.post("agentGenerate", InstancePaths.agentGenerate, {
+          query: WorkspaceRoutingQuery,
+          payload: AgentGeneratePayload,
+          success: described(AgentGenerateResult, "Generated agent draft"),
+          error: ApiSkillManageError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "app.agentGenerate",
+            summary: "Generate agent",
+            description: "Generate an agent draft using AI based on name and description.",
           }),
         ),
         HttpApiEndpoint.get("skill", InstancePaths.skill, {

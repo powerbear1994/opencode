@@ -43,6 +43,7 @@ const AgentFileQuery = Schema.Struct({
 
 const AgentFileResponse = Schema.Struct({
   name: Schema.String,
+  path: Schema.String,
   content: Schema.String,
   frontmatter: Schema.Record(Schema.String, Schema.Unknown),
   body: Schema.String,

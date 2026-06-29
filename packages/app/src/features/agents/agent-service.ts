@@ -48,6 +48,24 @@ async function apiPost<T>(base: string, path: string, body: unknown, auth: Serve
   return json.data as T
 }
 
+async function apiPostRaw<T>(base: string, path: string, body: unknown, auth: ServerAuth): Promise<T> {
+  const resp = await fetch(path.startsWith("http") ? path : `${base}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...buildAuthHeaders(auth) },
+    body: JSON.stringify(body),
+  })
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => resp.statusText)
+    throw new Error(`Agent API error (${resp.status}): ${text}`)
+  }
+  const text = await resp.text()
+  if (!text) return undefined as T
+  if (!resp.headers.get("content-type")?.includes("json")) {
+    throw new Error("Agent API returned a non-JSON response. Check that the backend route is available.")
+  }
+  return JSON.parse(text) as T
+}
+
 async function apiPut<T>(base: string, path: string, body: unknown, auth: ServerAuth): Promise<T> {
   const resp = await fetch(`${base}${path}`, {
     method: "PUT",
@@ -137,6 +155,7 @@ async function detectSource(base: string, directory: string, agent: Agent, auth:
 export interface AgentService {
   listAgents(): Promise<{ agents: Agent[]; sources: Map<string, AgentSource>; debug: any }>
   readAgentFile(id: string, location: string): Promise<AgentFileContent>
+  generateAgent(input: { name: string; description: string }): Promise<Pick<AgentFormData, "name" | "description" | "mode" | "prompt">>
   createAgent(data: AgentFormData): Promise<{ name: string; path: string }>
   updateAgent(id: string, data: AgentFormData): Promise<{ name: string; path: string }>
   deleteAgent(id: string, location: string): Promise<void>
@@ -211,6 +230,17 @@ export function createAgentService(auth: ServerAuth, directory: string): AgentSe
         bodyLen: data.body?.length,
       })
       return data
+    },
+
+    async generateAgent(input: { name: string; description: string }) {
+      const url = new URL("/agent/generate", `${base}/`)
+      if (directory) url.searchParams.set("directory", directory)
+      return apiPostRaw<Pick<AgentFormData, "name" | "description" | "mode" | "prompt">>(
+        base,
+        url.toString(),
+        input,
+        auth,
+      )
     },
 
     async createAgent(data: AgentFormData) {

@@ -16,6 +16,12 @@ export const Entry = Schema.Struct({
   type: Schema.Literals(["file", "directory"]),
 }).annotate({ identifier: "FileSystem.Entry" })
 
+export const WriteInput = Schema.Struct({
+  path: RelativePath,
+  content: Schema.String,
+}).annotate({ identifier: "FileSystem.WriteInput" })
+export type WriteInput = typeof WriteInput.Type
+
 export interface Submatch extends Schema.Schema.Type<typeof Submatch> {}
 export const Submatch = Schema.Struct({
   text: Schema.String,

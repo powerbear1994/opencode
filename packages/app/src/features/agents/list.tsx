@@ -4,7 +4,7 @@ import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Tooltip } from "@opencode-ai/ui/tooltip"
 import type { Agent } from "@opencode-ai/sdk/v2/client"
 import type { AgentSource } from "./types"
-import { isBuiltinAgent, SOURCE_LABELS, MODE_LABELS } from "./types"
+import { isBuiltinAgent, SOURCE_LABELS } from "./types"
 
 // ── Filter tab ─────────────────────────────────────────────────────────────────
 
@@ -46,14 +46,15 @@ interface AgentListProps {
 // ── Badge helpers ──────────────────────────────────────────────────────────────
 
 const SourceBadge: Component<{ source: AgentSource }> = (props) => (
-  <span class="shrink-0 px-1.5 py-px rounded-[3px] text-[10px] font-[530] leading-snug text-[var(--v2-blue-500)] bg-[var(--v2-blue-400)]/10">
+  <span
+    class="shrink-0 rounded-[3px] px-1.5 py-px text-[10px] font-[530] leading-snug"
+    classList={{
+      "bg-[var(--v2-blue-400)]/10 text-[var(--v2-blue-500)]": props.source === "project",
+      "bg-[var(--v2-green-400)]/10 text-[var(--v2-green-600)]": props.source === "global",
+      "bg-[var(--v2-background-bg-layer-02)] text-[var(--v2-text-text-muted)]": props.source === "built-in",
+    }}
+  >
     {SOURCE_LABELS[props.source]}
-  </span>
-)
-
-const ModeBadge: Component<{ mode: string }> = (props) => (
-  <span class="shrink-0 px-1.5 py-px rounded-[3px] text-[10px] font-[530] leading-snug text-[var(--v2-text-text-muted)] bg-[var(--v2-background-bg-layer-02)]">
-    {MODE_LABELS[props.mode] ?? props.mode}
   </span>
 )
 
@@ -197,7 +198,7 @@ export const AgentList: Component<AgentListProps> = (props) => {
                     classList={{
                       "bg-transparent border-transparent hover:bg-[var(--v2-background-bg-layer-01)] hover:border-[var(--v2-border-border-base)]":
                         !isSelected(),
-                      "bg-[var(--v2-background-bg-layer-01)] border-[var(--v2-border-border-base)]":
+                      "border-[var(--v2-blue-400)]/30 bg-[var(--v2-blue-400)]/5":
                         isSelected(),
                     }}
                     onClick={() => props.onSelect(agent.name)}
@@ -222,12 +223,6 @@ export const AgentList: Component<AgentListProps> = (props) => {
                     <p class="mt-1 line-clamp-2 text-[11px] leading-snug text-[var(--v2-text-text-muted)]">
                       {agent.description || "没有描述"}
                     </p>
-                    <div class="mt-1 flex min-w-0 items-center gap-1.5">
-                      <ModeBadge mode={agent.mode} />
-                      <span class="min-w-0 truncate text-[10px] text-[var(--v2-text-text-faint)]">
-                        {agent.model ? `${agent.model.providerID}/${agent.model.modelID}` : "默认模型"}
-                      </span>
-                    </div>
                   </button>
                 )
               }}

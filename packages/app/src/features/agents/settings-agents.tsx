@@ -1,13 +1,12 @@
 import { createEffect, createMemo, createResource, createSignal, Show, ErrorBoundary } from "solid-js"
 import { useParams, useSearchParams } from "@solidjs/router"
-import { useQueryClient } from "@tanstack/solid-query"
 import { useServer } from "@/context/server"
 import { useServerSDK } from "@/context/server-sdk"
 import { useLanguage } from "@/context/language"
 import { showToast } from "@/utils/toast"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
+import { Dialog } from "@opencode-ai/ui/dialog"
 import { decode64 } from "@/utils/base64"
-import { pathKey } from "@/utils/path-key"
 import type { AgentSource, AgentFormData } from "./types"
 import { isBuiltinAgent } from "./types"
 import { createAgentService, type AgentService, type ServerAuth } from "./agent-service"
@@ -15,6 +14,9 @@ import { AgentList } from "./list"
 import { AgentDetail } from "./detail"
 import { AgentEditor } from "./editor"
 import { DeleteAgentDialog } from "./delete-dialog"
+
+const MIN_SMART_DESCRIPTION_LENGTH = 20
+type AgentListResult = Awaited<ReturnType<AgentService["listAgents"]>>
 
 // ── Error fallback ─────────────────────────────────────────────────────────────
 
@@ -40,7 +42,6 @@ const AgentsContent = () => {
   const serverSDK = useServerSDK()
   const language = useLanguage()
   const dialogFn = useDialog()
-  const queryClient = useQueryClient()
   const params = useParams<{ dir?: string }>()
   const [searchParams] = useSearchParams<{ project?: string }>()
 
@@ -49,6 +50,10 @@ const AgentsContent = () => {
   const [sourceFilter, setSourceFilter] = createSignal<AgentSource | "all">("all")
   const [mode, setMode] = createSignal<"view" | "create" | "edit">("view")
   const [editorInitialData, setEditorInitialData] = createSignal<Partial<AgentFormData> | undefined>()
+  const [smartName, setSmartName] = createSignal("")
+  const [smartDescription, setSmartDescription] = createSignal("")
+  const [smartGenerating, setSmartGenerating] = createSignal(false)
+  const [smartError, setSmartError] = createSignal<string>()
 
   // Workflow pages keep the active project in the query string because they have no directory route segment.
   const directory = createMemo(() => {
@@ -75,7 +80,7 @@ const AgentsContent = () => {
 
   // ── Data ─────────────────────────────────────────────────────────────────
 
-  const [data, { refetch }] = createResource(
+  const [data, { refetch, mutate }] = createResource(
     () => service(),
     async (svc) => svc.listAgents(),
   )
@@ -139,21 +144,45 @@ const AgentsContent = () => {
     return sources().get(agent.name) ?? "project"
   }
 
-  const refreshAgents = async () => {
-    const svc = service()
-    if (!svc) return
-    await svc.disposeInstance()
-    await queryClient.refetchQueries({
-      queryKey: [serverSDK().scope, pathKey(directory() ?? ""), "agents"],
-      exact: true,
-    })
-    await refetch()
+  const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+  const customCount = (value: AgentListResult | null | undefined, removedName?: string) =>
+    value?.agents.filter((agent) => agent.name !== removedName && !isBuiltinAgent(agent.name)).length ?? 0
+
+  const withoutAgent = (value: AgentListResult | null | undefined, id: string) => {
+    if (!value) return
+    const nextSources = new Map(value.sources)
+    nextSources.delete(id)
+    return {
+      ...value,
+      agents: value.agents.filter((agent) => agent.name !== id),
+      sources: nextSources,
+    }
   }
 
-  const refreshAfterMutation = async () => {
+  const refreshReady = (
+    value: AgentListResult | null | undefined,
+    options: { expectedName?: string; removedName?: string; fallback?: AgentListResult },
+  ) => {
+    if (!value) return false
+    if (options.expectedName && !value.agents.some((agent) => agent.name === options.expectedName)) return false
+    if (options.removedName && value.agents.some((agent) => agent.name === options.removedName)) return false
+    if (customCount(value) < customCount(options.fallback, options.removedName)) return false
+    return true
+  }
+
+  const refreshAgents = async (options: { expectedName?: string; removedName?: string; fallback?: AgentListResult } = {}) => {
+    const first = await refetch()
+    if (refreshReady(first, options)) return true
+    // 一次快速重试，处理服务端写入延迟
+    await delay(150)
+    const second = await refetch()
+    return refreshReady(second, options)
+  }
+
+  const refreshAfterMutation = async (options: { expectedName?: string; removedName?: string; fallback?: AgentListResult } = {}) => {
     try {
-      await refreshAgents()
-      return true
+      return await refreshAgents(options)
     } catch (err) {
       console.error("[agents] Failed to refresh agent data after mutation", err)
       return false
@@ -166,6 +195,48 @@ const AgentsContent = () => {
     setSelectedId(null)
     setEditorInitialData(undefined)
     setMode("create")
+  }
+
+  const startSmartCreate = () => {
+    setSmartName("")
+    setSmartDescription("")
+    setSmartError(undefined)
+    setSmartGenerating(false)
+    dialogFn.push(() => <SmartCreateDialog />)
+  }
+
+  const smartCreate = async () => {
+    const svc = service()
+    const name = smartName().trim()
+    const description = smartDescription().trim()
+    if (!svc) return
+    if (!name) {
+      setSmartError("请输入智能体名称。")
+      return
+    }
+    if (description.length < MIN_SMART_DESCRIPTION_LENGTH) {
+      setSmartError(`智能体需求至少需要 ${MIN_SMART_DESCRIPTION_LENGTH} 个字符。`)
+      return
+    }
+    setSmartGenerating(true)
+    setSmartError(undefined)
+    try {
+      const generated = await svc.generateAgent({ name, description })
+      setSelectedId(null)
+      setEditorInitialData({
+        name: generated.name || name,
+        location: hasProject() ? "project" : "global",
+        description: generated.description,
+        mode: generated.mode,
+        prompt: generated.prompt,
+      })
+      dialogFn.close()
+      setMode("create")
+    } catch (err) {
+      setSmartError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSmartGenerating(false)
+    }
   }
 
   const cancelEdit = () => {
@@ -231,28 +302,120 @@ const AgentsContent = () => {
   const handleSave = async (formData: AgentFormData, mode: "create" | "edit") => {
     const svc = service()
     if (!svc) return
+    let savedName = formData.name
     try {
       if (mode === "create") {
-        await svc.createAgent(formData)
+        savedName = (await svc.createAgent(formData)).name
       } else {
-        await svc.updateAgent(formData.name, formData)
+        savedName = (await svc.updateAgent(formData.name, formData)).name
       }
     } catch (err) {
       showToast({ variant: "error", title: "保存失败", description: err instanceof Error ? err.message : String(err) })
       return
     }
 
-    const synced = await refreshAfterMutation()
-    setSelectedId(formData.name)
+    const synced = await refreshAfterMutation({ expectedName: savedName })
+    setSelectedId(savedName)
     setEditorInitialData(undefined)
     setMode("view")
     showToast({
       variant: synced ? "success" : "error",
       title: synced ? (mode === "create" ? "创建成功" : "更新成功") : "已保存，但同步失败",
       description: synced
-        ? `智能体「${formData.name}」已${mode === "create" ? "创建" : "更新"}并同步生效。`
+        ? `智能体「${savedName}」已${mode === "create" ? "创建" : "更新"}并同步生效。`
         : "请重新打开当前项目以加载最新智能体配置。",
     })
+  }
+
+  function SmartCreateDialog() {
+    return (
+      <Dialog title="智能生成智能体" size="x-large">
+        <div class="flex flex-col gap-6 px-2 pb-2 pt-1">
+          <div class="rounded-[8px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-4 py-3">
+            <p class="text-[13px] font-[530] text-[var(--v2-text-text-base)]">AI 智能生成</p>
+            <p class="mt-0.5 text-[12px] leading-relaxed text-[var(--v2-text-text-muted)]">
+              输入名称和智能体需求，AI 会生成简介、模式和系统提示词，并填充到创建表单中
+            </p>
+          </div>
+
+          <div class="flex flex-col gap-4">
+            <Show when={smartGenerating()}>
+              <div class="flex flex-col items-center gap-3 rounded-[8px] border border-[var(--v2-blue-400)]/20 bg-[var(--v2-blue-400)]/4 px-4 py-6">
+                <span class="inline-flex gap-1">
+                  <span class="size-2 animate-pulse rounded-full bg-[var(--v2-blue-400)]" style="animation-delay:0ms" />
+                  <span class="size-2 animate-pulse rounded-full bg-[var(--v2-blue-400)]" style="animation-delay:200ms" />
+                  <span class="size-2 animate-pulse rounded-full bg-[var(--v2-blue-400)]" style="animation-delay:400ms" />
+                </span>
+                <div class="text-center">
+                  <p class="text-[13px] font-[530] text-[var(--v2-text-text-base)]">AI 正在生成智能体</p>
+                  <p class="mt-1 text-[12px] text-[var(--v2-text-text-muted)]">正在调用模型生成智能体草稿，请稍候</p>
+                </div>
+              </div>
+            </Show>
+
+            <Show when={!smartGenerating()}>
+              <label class="flex flex-col gap-1.5">
+                <span class="text-[12px] font-[530] text-[var(--v2-text-text-base)]">
+                  名称
+                  <span class="ml-0.5 text-[var(--v2-red-400)]">*</span>
+                </span>
+                <input
+                  autofocus
+                  value={smartName()}
+                  onInput={(event) => setSmartName(event.currentTarget.value)}
+                  placeholder="例如：design-agent"
+                  disabled={smartGenerating()}
+                  class="h-8 min-w-0 rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-2.5 text-[13px] text-[var(--v2-text-text-base)] outline-none transition-colors placeholder:text-[var(--v2-text-text-faint)] focus:border-[var(--v2-blue-400)]"
+                />
+              </label>
+
+              <label class="flex flex-col gap-1.5">
+                <span class="text-[12px] font-[530] text-[var(--v2-text-text-base)]">
+                  智能体需求
+                  <span class="ml-0.5 text-[var(--v2-red-400)]">*</span>
+                </span>
+                <textarea
+                  value={smartDescription()}
+                  onInput={(event) => setSmartDescription(event.currentTarget.value)}
+                  placeholder="描述这个智能体的职责、调用场景、工作边界和输出要求"
+                  disabled={smartGenerating()}
+                  rows={4}
+                  class="min-h-[80px] resize-none rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-2.5 py-2 text-[13px] leading-relaxed text-[var(--v2-text-text-base)] outline-none transition-colors placeholder:text-[var(--v2-text-text-faint)] focus:border-[var(--v2-blue-400)]"
+                />
+                <span class="text-[11px] text-[var(--v2-text-text-faint)]">
+                  至少 {MIN_SMART_DESCRIPTION_LENGTH} 个字符
+                </span>
+              </label>
+            </Show>
+          </div>
+
+          <Show when={smartError()}>
+            <div class="rounded-[6px] border border-[var(--v2-red-400)]/40 bg-[var(--v2-red-400)]/10 px-3 py-2 text-[12px] text-[var(--v2-text-text-base)]">
+              {smartError()}
+            </div>
+          </Show>
+
+          <div class="flex items-center justify-end gap-2.5 border-t border-[var(--v2-border-border-base)] pt-5">
+            <button
+              type="button"
+              onClick={() => dialogFn.close()}
+              disabled={smartGenerating()}
+              class="inline-flex h-8 items-center gap-1.5 rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-3 text-[12px] font-[530] text-[var(--v2-text-text-base)] transition-colors hover:bg-[var(--v2-background-bg-layer-02)] disabled:opacity-50"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={smartCreate}
+              disabled={smartGenerating() || !smartName().trim() || smartDescription().trim().length < MIN_SMART_DESCRIPTION_LENGTH}
+              class="inline-flex h-8 items-center gap-1.5 rounded-[6px] border border-[var(--v2-blue-400)]/45 bg-[var(--v2-blue-400)]/12 px-3 text-[12px] font-[530] text-[var(--v2-text-text-base)] transition-colors hover:bg-[var(--v2-blue-400)]/18 disabled:opacity-50"
+            >
+              {smartGenerating() ? "正在生成" : "生成"}
+            </button>
+          </div>
+        </div>
+      </Dialog>
+    )
   }
 
   const handleDeleteClick = (id: string) => {
@@ -268,13 +431,34 @@ const AgentsContent = () => {
     ))
   }
 
+  const handleCopyPath = async (id: string) => {
+    const svc = service()
+    const source = selectedSource()
+    if (!svc || source === "built-in") return
+    try {
+      const file = await svc.readAgentFile(id, source)
+      await navigator.clipboard.writeText(file.path)
+    } catch (err) {
+      showToast({
+        variant: "error",
+        title: "复制失败",
+        description: err instanceof Error ? err.message : String(err),
+      })
+      throw err
+    }
+  }
+
   const handleDeleteConfirm = async (id: string, source: string) => {
     const svc = service()
     if (!svc) return
+    const beforeDelete = data()
+    const optimistic = withoutAgent(beforeDelete, id)
     try {
       await svc.deleteAgent(id, source)
+      if (optimistic) mutate(optimistic)
       if (selectedId() === id) setSelectedId(null)
-      const synced = await refreshAfterMutation()
+      const synced = await refreshAfterMutation({ removedName: id, fallback: beforeDelete })
+      if (!synced && optimistic) mutate(optimistic)
       showToast({
         variant: synced ? "success" : "error",
         title: synced ? "删除成功" : "已删除，但同步失败",
@@ -293,15 +477,20 @@ const AgentsContent = () => {
       <div class="shrink-0 border-b border-[var(--v2-border-border-base)] px-5 pb-3 pt-4">
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">
-            <h1 class="text-[16px] font-[530] leading-8 text-[var(--v2-text-text-base)]">{language.t("agents.title")}</h1>
+            <div>
+              <h1 class="text-[16px] font-[530] leading-8 text-[var(--v2-text-text-base)]">{language.t("agents.title")}</h1>
+              <p class="text-[12px] leading-5 text-[var(--v2-text-text-muted)]">管理当前项目与全局可用的智能体配置</p>
+            </div>
           </div>
-          <button
-            type="button"
-            onClick={handleNew}
-            class="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-3 text-[12px] font-[530] text-[var(--v2-text-text-base)] transition-colors hover:bg-[var(--v2-background-bg-layer-02)]"
-          >
-            新建智能体
-          </button>
+          <Show when={mode() === "view"}>
+            <button
+              type="button"
+              onClick={handleNew}
+              class="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-3 text-[12px] font-[530] text-[var(--v2-text-text-base)] transition-colors hover:bg-[var(--v2-background-bg-layer-02)]"
+            >
+              新建智能体
+            </button>
+          </Show>
         </div>
       </div>
 
@@ -353,6 +542,7 @@ const AgentsContent = () => {
                   onEdit={() => selectedAgent() && handleEdit(selectedAgent()!.name)}
                   onDelete={() => selectedAgent() && handleDeleteClick(selectedAgent()!.name)}
                   onDuplicate={() => selectedAgent() && handleDuplicate(selectedAgent()!.name)}
+                  onCopyPath={() => selectedAgent() ? handleCopyPath(selectedAgent()!.name) : Promise.resolve()}
                 />
               </Show>
             }
@@ -366,6 +556,7 @@ const AgentsContent = () => {
               hasProject={hasProject()}
               createAsSubagent={mode() === "create" && !editorInitialData()}
               variant="inline"
+              onSmartGenerate={startSmartCreate}
               onCancel={cancelEdit}
               onSave={(formData) => handleSave(formData, mode() === "edit" ? "edit" : "create")}
             />
