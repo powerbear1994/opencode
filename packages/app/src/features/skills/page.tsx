@@ -1067,7 +1067,7 @@ function SkillDetail(props: {
                   智能生成
                 </button>
                 <button type="button" onClick={props.onCreate} disabled={props.busy || !props.createName.trim()} class={primaryButton()}>
-                  创建
+                  保存
                 </button>
                 <button type="button" onClick={props.onCancelCreate} class={secondaryButton()}>
                   取消

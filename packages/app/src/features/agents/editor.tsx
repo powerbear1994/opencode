@@ -423,7 +423,7 @@ export const AgentEditor: Component<AgentEditorProps> = (props) => {
                 disabled={props.loading || !valid()}
                 class="inline-flex h-8 items-center gap-1.5 rounded-[6px] bg-[var(--v2-text-text-base)] px-3 text-[12px] font-[530] text-[var(--v2-background-bg-base)] transition-opacity hover:opacity-90 disabled:opacity-50"
               >
-                {props.loading ? "保存中..." : props.nameLocked ? "保存" : "创建"}
+                {props.loading ? "保存中..." : "保存"}
               </button>
               <button
                 type="button"
