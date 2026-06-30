@@ -30,6 +30,8 @@ export const SidebarContent = (props: {
   onOpenSettings: () => void
   helpLabel: Accessor<string>
   onOpenHelp: () => void
+  logoutLabel: Accessor<string>
+  onLogout: (() => void) | undefined
   requirementsLabel: Accessor<string>
   onOpenRequirements: () => void
   designLabel: Accessor<string>
@@ -152,6 +154,17 @@ export const SidebarContent = (props: {
               aria-label={props.helpLabel()}
             />
           </Tooltip>
+          <Show when={props.onLogout}>
+            <Tooltip placement={placement()} value={props.logoutLabel()}>
+              <IconButton
+                icon="logout"
+                variant="ghost"
+                size="large"
+                onClick={props.onLogout}
+                aria-label={props.logoutLabel()}
+              />
+            </Tooltip>
+          </Show>
         </div>
       </div>
 

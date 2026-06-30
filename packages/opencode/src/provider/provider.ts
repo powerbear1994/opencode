@@ -31,6 +31,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { ModelStatus } from "./model-status"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderError } from "./error"
+import { createCompanyTxtFetch } from "./company-txt"
 
 const OPENAI_HEADER_TIMEOUT_DEFAULT = 10_000
 
@@ -214,6 +215,14 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
           return sdk.responses(modelID)
         },
         options: {},
+      }),
+    "company-txt": (provider) =>
+      Effect.succeed({
+        autoload: true,
+        options: {
+          baseURL: provider.options.baseURL || "http://company-txt.local/v1",
+          fetch: createCompanyTxtFetch(provider),
+        },
       }),
     "github-copilot": () =>
       Effect.succeed({

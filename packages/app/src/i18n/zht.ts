@@ -627,6 +627,9 @@ export const dict = {
 
   "settings.general.row.language.title": "語言",
   "settings.general.row.language.description": "變更 OpenCode 的顯示語言",
+  "settings.general.row.remoteServiceUrl.title": "遠端服務 URL",
+  "settings.general.row.remoteServiceUrl.description": "供指定的遠端功能使用，不會改變本機 OpenCode 伺服器。",
+  "settings.general.row.remoteServiceUrl.placeholder": "https://service.example.com",
   "settings.general.row.appearance.title": "外觀",
   "settings.general.row.appearance.description": "自訂 OpenCode 在你的裝置上的外觀",
   "settings.general.row.colorScheme.title": "配色方案",

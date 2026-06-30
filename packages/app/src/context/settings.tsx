@@ -45,6 +45,9 @@ export interface Settings {
   permissions: {
     autoApprove: boolean
   }
+  remoteService: {
+    baseUrl: string
+  }
   notifications: NotificationSettings
   sounds: SoundSettings
 }
@@ -128,6 +131,9 @@ const defaultSettings: Settings = {
   keybinds: {},
   permissions: {
     autoApprove: false,
+  },
+  remoteService: {
+    baseUrl: "",
   },
   notifications: {
     agent: true,
@@ -298,6 +304,12 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         autoApprove: withFallback(() => store.permissions?.autoApprove, defaultSettings.permissions.autoApprove),
         setAutoApprove(value: boolean) {
           setStore("permissions", "autoApprove", value)
+        },
+      },
+      remoteService: {
+        baseUrl: withFallback(() => store.remoteService?.baseUrl, defaultSettings.remoteService.baseUrl),
+        setBaseUrl(value: string) {
+          setStore("remoteService", "baseUrl", value.trim())
         },
       },
       notifications: {

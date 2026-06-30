@@ -359,6 +359,24 @@ export const SettingsGeneralV2: Component = () => {
 
       <SettingsListV2>
         <SettingsRowV2
+          title={language.t("settings.general.row.remoteServiceUrl.title")}
+          description={language.t("settings.general.row.remoteServiceUrl.description")}
+        >
+          <TextInputV2
+            type="url"
+            appearance="base"
+            data-action="settings-remote-service-url"
+            value={settings.remoteService.baseUrl()}
+            placeholder={language.t("settings.general.row.remoteServiceUrl.placeholder")}
+            spellcheck={false}
+            autocorrect="off"
+            autocomplete="off"
+            autocapitalize="off"
+            onInput={(event) => settings.remoteService.setBaseUrl(event.currentTarget.value)}
+          />
+        </SettingsRowV2>
+
+        <SettingsRowV2
           title={language.t("settings.general.row.showFileTree.title")}
           description={language.t("settings.general.row.showFileTree.description")}
         >

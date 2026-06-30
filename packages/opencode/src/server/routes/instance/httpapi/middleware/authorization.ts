@@ -1,5 +1,6 @@
 import { ServerAuth } from "@/server/auth"
-import { Effect, Encoding, Layer, Redacted } from "effect"
+import { verifyJwt } from "../auth-jwt"
+import { Effect, Encoding, Layer, Option, Redacted } from "effect"
 import { HttpEffect, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiError, HttpApiMiddleware } from "effect/unstable/httpapi"
 import { hasPtyConnectTicketURL } from "@/server/shared/pty-ticket"
@@ -10,8 +11,13 @@ export {
 } from "@opencode-ai/server/middleware/authorization"
 
 const AUTH_TOKEN_QUERY = "auth_token"
+const AUTH_LOGIN_PATH = "/api/auth/login"
 const UNAUTHORIZED = 401
 const WWW_AUTHENTICATE = 'Basic realm="Secure Area"'
+
+function hasAuthLoginUrl(url: URL) {
+  return url.pathname === AUTH_LOGIN_PATH
+}
 
 // Avoid HttpApiSecurity alternatives here: Effect security middleware wraps the
 // full handler, so a downstream failure can make the next auth alternative run
@@ -107,13 +113,30 @@ export const authorizationRouterMiddleware = HttpRouter.middleware()(
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
         const url = new URL(request.url, "http://localhost")
-        if (isPublicUIPath(request.method, url.pathname)) return yield* effect
+        if (isPublicUIPath(request.method, url.pathname) || hasAuthLoginUrl(url)) return yield* effect
+        // Try Bearer JWT first
+        const bearer = bearerTokenFromRequest(request)
+        if (Option.isSome(bearer)) {
+          const result = yield* Effect.option(verifyJwt(bearer.value, config))
+          if (Option.isSome(result)) return yield* effect
+          return yield* Effect.succeed(
+            HttpServerResponse.empty({
+              status: UNAUTHORIZED,
+              headers: { "www-authenticate": "Bearer" },
+            }),
+          )
+        }
         return yield* credentialFromURL(url, request).pipe(
           Effect.flatMap((credential) => validateRawCredential(effect, credential, config)),
         )
       })
   }),
 )
+
+function bearerTokenFromRequest(request: HttpServerRequest.HttpServerRequest) {
+  const match = /^Bearer\s+(.+)$/i.exec(request.headers.authorization ?? "")
+  return match ? Option.some(match[1]) : Option.none()
+}
 
 export const authorizationLayer = Layer.effect(
   Authorization,
@@ -123,6 +146,16 @@ export const authorizationLayer = Layer.effect(
     return Authorization.of((effect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
+        const url = new URL(request.url, "http://localhost")
+        if (hasPtyConnectTicketURL(url) || hasAuthLoginUrl(url)) return yield* effect
+        // Try Bearer JWT first
+        const bearer = bearerTokenFromRequest(request)
+        if (Option.isSome(bearer)) {
+          const result = yield* Effect.option(verifyJwt(bearer.value, config))
+          if (Option.isSome(result)) return yield* effect
+          return yield* new HttpApiError.Unauthorized({})
+        }
+        // Fall back to Basic Auth
         return yield* credentialFromRequest(request).pipe(
           Effect.flatMap((credential) => validateCredential(effect, credential, config)),
         )

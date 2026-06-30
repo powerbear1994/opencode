@@ -2,6 +2,7 @@ import {
   createEffect,
   createMemo,
   createResource,
+  createSignal,
   For,
   on,
   onCleanup,
@@ -83,6 +84,8 @@ import {
 import { ProjectDragOverlay, SortableProject, type ProjectSidebarContext } from "./layout/sidebar-project"
 import { SidebarContent } from "./layout/sidebar-shell"
 
+const authLogoutEvent = "opencode:auth-logout"
+
 export default function LegacyLayout(props: ParentProps) {
   const serverSDK = useServerSDK()
   const [store, setStore, , ready] = persisted(
@@ -122,6 +125,7 @@ export default function LegacyLayout(props: ParentProps) {
   const command = useCommand()
   const theme = useTheme()
   const language = useLanguage()
+  const [authLogout, setAuthLogout] = createSignal<(() => void) | undefined>()
   createEffect(() => setV2Toast(false))
   const initialDirectory = decode64(params.dir)
   const location = useLocation()
@@ -231,6 +235,11 @@ export default function LegacyLayout(props: ParentProps) {
   })
 
   onMount(() => {
+    setAuthLogout(() => (window as any).__OPENCODE_AUTH_LOGOUT__)
+    const updateAuthLogout = (event: Event) => {
+      setAuthLogout(() => (event as CustomEvent<{ logout?: () => void }>).detail.logout)
+    }
+    window.addEventListener(authLogoutEvent, updateAuthLogout)
     const stop = () => setState("sizing", false)
     const blur = () => reset()
     const hide = () => {
@@ -242,6 +251,7 @@ export default function LegacyLayout(props: ParentProps) {
     makeEventListener(window, "blur", stop)
     makeEventListener(window, "blur", blur)
     makeEventListener(document, "visibilitychange", hide)
+    onCleanup(() => window.removeEventListener(authLogoutEvent, updateAuthLogout))
   })
 
   const sidebarHovering = createMemo(() => !layout.sidebar.opened() && state.hoverProject !== undefined)
@@ -2268,6 +2278,8 @@ export default function LegacyLayout(props: ParentProps) {
       onOpenSettings={openSettings}
       helpLabel={() => language.t("sidebar.help")}
       onOpenHelp={() => platform.openLink("https://opencode.ai/desktop-feedback")}
+      logoutLabel={() => "登出"}
+      onLogout={authLogout()}
       requirementsLabel={() => language.t("sidebar.requirements")}
       onOpenRequirements={() => {
         const project = currentProject()

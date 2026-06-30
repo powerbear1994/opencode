@@ -918,6 +918,9 @@ export const dict = {
 
   "settings.general.row.language.title": "Language",
   "settings.general.row.language.description": "Change the display language for OpenCode",
+  "settings.general.row.remoteServiceUrl.title": "Remote service URL",
+  "settings.general.row.remoteServiceUrl.description": "Used by selected remote-backed features without changing the local OpenCode server.",
+  "settings.general.row.remoteServiceUrl.placeholder": "https://service.example.com",
   "settings.general.row.shell.title": "Terminal Shell",
   "settings.general.row.shell.description":
     "Choose the shell used for your terminal. Compatible shells are also used for agent tool calls.",

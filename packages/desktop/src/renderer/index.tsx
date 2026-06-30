@@ -12,6 +12,7 @@ import {
   PlatformProvider,
   ServerConnection,
   useCommand,
+  useSettings,
   useWslServers,
 } from "@opencode-ai/app"
 import type { UpdaterState } from "@opencode-ai/app/updater"
@@ -28,6 +29,15 @@ import { availableStartupServer, readyWslConnections } from "./wsl/connections"
 import "./styles.css"
 import { Splash } from "@opencode-ai/ui/logo"
 import { useTheme } from "@opencode-ai/ui/theme/context"
+import {
+  AuthProvider,
+  useAuth,
+  authTokenRef,
+  isMockAuthToken,
+  setAuthServerUrl,
+  setRemoteServiceBaseUrl,
+} from "./context/auth"
+import { LoginPage } from "./pages/login"
 
 const root = document.getElementById("root")
 if (import.meta.env.DEV && !(root instanceof HTMLElement)) {
@@ -63,6 +73,7 @@ const [updaterState, setUpdaterState] = createSignal<UpdaterState>({ status: "di
 void window.api.updater.subscribe(setUpdaterState)
 
 const deepLinkEvent = "opencode:deep-link"
+const authLogoutEvent = "opencode:auth-logout"
 
 const emitDeepLinks = (urls: string[]) => {
   if (urls.length === 0) return
@@ -227,8 +238,13 @@ const createPlatform = (): Platform => {
     },
 
     fetch: (input, init) => {
-      if (input instanceof Request) return fetch(input)
-      return fetch(input, init)
+      const headers = new Headers(input instanceof Request ? input.headers : undefined)
+      new Headers(init?.headers).forEach((value, key) => headers.set(key, value))
+      if (authTokenRef.current && !isMockAuthToken(authTokenRef.current) && !headers.has("Authorization")) {
+        headers.set("Authorization", `Bearer ${authTokenRef.current}`)
+      }
+      if (input instanceof Request) return fetch(new Request(input, { ...init, headers }))
+      return fetch(input, { ...init, headers })
     },
 
     getDefaultServer: async () => {
@@ -314,6 +330,8 @@ render(() => {
 
   function Inner() {
     const cmd = useCommand()
+    const auth = useAuth()
+    const settings = useSettings()
     menuTrigger = (id) => cmd.trigger(id)
 
     const theme = useTheme()
@@ -327,10 +345,28 @@ render(() => {
       }
     })
 
+    // Expose a reactive logout bridge for the app package sidebar.
+    createEffect(() => {
+      setRemoteServiceBaseUrl(settings.remoteService.baseUrl() || undefined)
+    })
+
+    createEffect(() => {
+      const target = window as typeof window & { __OPENCODE_AUTH_LOGOUT__?: () => void }
+      if (auth.authenticated()) {
+        const logout = () => void auth.logout()
+        target.__OPENCODE_AUTH_LOGOUT__ = logout
+        window.dispatchEvent(new CustomEvent(authLogoutEvent, { detail: { logout } }))
+        return
+      }
+      delete target.__OPENCODE_AUTH_LOGOUT__
+      window.dispatchEvent(new CustomEvent(authLogoutEvent, { detail: { logout: undefined } }))
+    })
+
     return null
   }
 
   function App() {
+    const auth = useAuth()
     const wslServers = useWslServers()
     const splash = (
       <div class="h-dvh w-screen flex flex-col items-center justify-center bg-background-base">
@@ -338,8 +374,14 @@ render(() => {
       </div>
     )
 
+    // Propagate sidecar URL to auth context
+    createEffect(() => {
+      const data = initializationData(sidecar)
+      if (data) setAuthServerUrl(data.url)
+    })
+
     const ready = createMemo(
-      () => !defaultServer.loading && !sidecar.loading && !windowCount.loading && !locale.loading,
+      () => !defaultServer.loading && !sidecar.loading && !windowCount.loading && !locale.loading && auth.ready(),
     )
     const servers = createMemo(() => {
       const data = initializationData(sidecar)
@@ -365,12 +407,14 @@ render(() => {
 
     return (
       <Show when={ready()} fallback={splash}>
-        <Show when={effectiveDefaultServer()} keyed>
-          {(key) => (
-            <AppInterface defaultServer={key} servers={servers()} router={MemoryRouter}>
-              <Inner />
-            </AppInterface>
-          )}
+        <Show when={auth.authenticated()} fallback={<LoginPage />}>
+          <Show when={effectiveDefaultServer()} keyed>
+            {(key) => (
+              <AppInterface defaultServer={key} servers={servers()} router={MemoryRouter}>
+                <Inner />
+              </AppInterface>
+            )}
+          </Show>
         </Show>
       </Show>
     )
@@ -386,7 +430,9 @@ render(() => {
   return (
     <PlatformProvider value={platform}>
       <AppBaseProviders locale={locale.latest}>
-        <Show when={true}>{(_) => <App />}</Show>
+        <AuthProvider>
+          <Show when={true}>{(_) => <App />}</Show>
+        </AuthProvider>
       </AppBaseProviders>
     </PlatformProvider>
   )

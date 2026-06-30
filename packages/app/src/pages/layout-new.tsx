@@ -1,19 +1,28 @@
-import { createEffect, Suspense, type ParentProps } from "solid-js"
+import { createEffect, onCleanup, Suspense, type ParentProps } from "solid-js"
 import { useNavigate, useParams } from "@solidjs/router"
 import { DebugBar } from "@/components/debug-bar"
 import { HelpButton } from "@/components/help-button"
 import { Titlebar, type TitlebarUpdate } from "@/components/titlebar"
+import { useCommand } from "@/context/command"
 import { useNotification } from "@/context/notification"
 import { usePlatform } from "@/context/platform"
+import { useLanguage } from "@/context/language"
 import { setNavigate } from "@/utils/notification-click"
 import { setV2Toast, ToastRegion } from "@/utils/toast"
+import { useDialog } from "@opencode-ai/ui/context/dialog"
 
 export default function NewLayout(props: ParentProps) {
   const platform = usePlatform()
   const notification = useNotification()
+  const command = useCommand()
+  const dialog = useDialog()
+  const language = useLanguage()
   const navigate = useNavigate()
   const params = useParams<{ id?: string }>()
   setNavigate(navigate)
+
+  let dialogRun = 0
+  let dialogDead = false
 
   createEffect(() => setV2Toast(true))
   createEffect(() => {
@@ -21,6 +30,41 @@ export default function NewLayout(props: ParentProps) {
     if (notification.session.unseenCount(params.id) === 0) return
     notification.session.markViewed(params.id)
   })
+
+  onCleanup(() => {
+    dialogDead = true
+    dialogRun += 1
+  })
+
+  function openSettings() {
+    const run = ++dialogRun
+    void import("@/components/settings-v2").then((x) => {
+      if (dialogDead || dialogRun !== run) return
+      dialog.show(() => <x.DialogSettings />)
+    })
+  }
+
+  command.register("layout", () => [
+    {
+      id: "settings.open",
+      title: language.t("command.settings.open"),
+      category: language.t("command.category.settings"),
+      keybind: "mod+comma",
+      onSelect: () => openSettings(),
+    },
+    ...(platform.platform === "desktop" && platform.exportDebugLogs
+      ? [
+          {
+            id: "logs.export",
+            title: "Export logs",
+            category: language.t("command.category.settings"),
+            onSelect: () => {
+              void platform.exportDebugLogs?.()
+            },
+          },
+        ]
+      : []),
+  ])
 
   const update: TitlebarUpdate = {
     version: () => {

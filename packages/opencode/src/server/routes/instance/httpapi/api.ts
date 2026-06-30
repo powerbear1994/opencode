@@ -7,6 +7,7 @@ import { Integration } from "@opencode-ai/core/integration"
 import { SkillV2 } from "@opencode-ai/core/skill"
 import { InstanceDisposed } from "@/server/event"
 import { Question } from "@/question"
+import { AuthApi } from "./groups/auth"
 import { ConfigApi } from "./groups/config"
 import { ControlApi } from "./groups/control"
 import { ControlPlaneApi } from "./groups/control-plane"
@@ -52,6 +53,7 @@ export const ServerApi = makeApi({
 })
 
 export const RootHttpApi = HttpApi.make("opencode-root")
+  .addHttpApi(AuthApi)
   .addHttpApi(ControlApi)
   .addHttpApi(ControlPlaneApi)
   .addHttpApi(GlobalApi)

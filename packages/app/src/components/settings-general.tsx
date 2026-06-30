@@ -362,6 +362,25 @@ export const SettingsGeneral: Component = () => {
 
       <SettingsList>
         <SettingsRow
+          title={language.t("settings.general.row.remoteServiceUrl.title")}
+          description={language.t("settings.general.row.remoteServiceUrl.description")}
+        >
+          <TextField
+            data-action="settings-remote-service-url"
+            hideLabel
+            label={language.t("settings.general.row.remoteServiceUrl.title")}
+            placeholder={language.t("settings.general.row.remoteServiceUrl.placeholder")}
+            value={settings.remoteService.baseUrl()}
+            onChange={(value) => settings.remoteService.setBaseUrl(value)}
+            spellcheck={false}
+            autocorrect="off"
+            autocomplete="off"
+            autocapitalize="off"
+            variant="ghost"
+          />
+        </SettingsRow>
+
+        <SettingsRow
           title={language.t("settings.general.row.showFileTree.title")}
           description={language.t("settings.general.row.showFileTree.description")}
         >
