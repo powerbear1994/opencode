@@ -135,7 +135,8 @@ export default function LegacyLayout(props: ParentProps) {
     location.pathname === "/development" ||
     location.pathname === "/test" ||
     location.pathname === "/skills" ||
-    location.pathname === "/agents",
+    location.pathname === "/agents" ||
+    location.pathname === "/rules",
   )
   const route = createMemo(() => {
     const slug = params.dir

@@ -364,6 +364,7 @@ export const SettingsGeneral: Component = () => {
         <SettingsRow
           title={language.t("settings.general.row.remoteServiceUrl.title")}
           description={language.t("settings.general.row.remoteServiceUrl.description")}
+          layout="stacked"
         >
           <TextField
             data-action="settings-remote-service-url"
@@ -372,6 +373,8 @@ export const SettingsGeneral: Component = () => {
             placeholder={language.t("settings.general.row.remoteServiceUrl.placeholder")}
             value={settings.remoteService.baseUrl()}
             onChange={(value) => settings.remoteService.setBaseUrl(value)}
+            copyable={!!settings.remoteService.baseUrl()}
+            copyKind="link"
             spellcheck={false}
             autocorrect="off"
             autocomplete="off"
@@ -771,9 +774,22 @@ interface SettingsRowProps {
   title: string | JSX.Element
   description: string | JSX.Element
   children: JSX.Element
+  layout?: "inline" | "stacked"
 }
 
 const SettingsRow: Component<SettingsRowProps> = (props) => {
+  if (props.layout === "stacked") {
+    return (
+      <div class="flex flex-col gap-3 py-3 border-b border-border-weak-base last:border-none">
+        <div class="flex min-w-0 flex-col gap-0.5">
+          <span class="text-14-medium text-text-strong">{props.title}</span>
+          <span class="text-12-regular text-text-weak">{props.description}</span>
+        </div>
+        <div class="w-full min-w-0">{props.children}</div>
+      </div>
+    )
+  }
+
   return (
     <div class="flex flex-wrap items-center gap-4 py-3 border-b border-border-weak-base last:border-none sm:flex-nowrap">
       <div class="flex min-w-0 flex-1 flex-col gap-0.5">

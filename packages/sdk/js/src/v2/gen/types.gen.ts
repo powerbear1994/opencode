@@ -106,6 +106,13 @@ export type QuestionRejected = {
   requestID: string
 }
 
+export type InvalidRequestError = {
+  _tag: "InvalidRequestError"
+  message: string
+  kind?: string
+  field?: string
+}
+
 export type OAuth = {
   type: "oauth"
   refresh: string
@@ -133,13 +140,6 @@ export type Auth = OAuth | ApiAuth | WellKnownAuth
 
 export type EffectHttpApiErrorBadRequest = {
   _tag: "BadRequest"
-}
-
-export type InvalidRequestError = {
-  _tag: "InvalidRequestError"
-  message: string
-  kind?: string
-  field?: string
 }
 
 export type MoveSessionError = {
@@ -2411,6 +2411,14 @@ export type Agent = {
   steps?: number
 }
 
+export type SkillManageError = {
+  name: "SkillManageError"
+  data: {
+    message: string
+    reason: "conflict" | "invalid" | "missing" | "readonly"
+  }
+}
+
 export type LspStatus = {
   id: string
   name: string
@@ -4300,6 +4308,11 @@ export type PermissionSavedInfo = {
 export type FileSystemEntry = {
   path: string
   type: "file" | "directory"
+}
+
+export type FileSystemWriteInput = {
+  path: string
+  content: string
 }
 
 export type CommandV2Info = {
@@ -7152,6 +7165,98 @@ export type BadRequestError = {
   }
 }
 
+export type AuthLoginData = {
+  body: {
+    username: string
+    password: string
+  }
+  path?: never
+  query?: never
+  url: "/api/auth/login"
+}
+
+export type AuthLoginErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+}
+
+export type AuthLoginError = AuthLoginErrors[keyof AuthLoginErrors]
+
+export type AuthLoginResponses = {
+  /**
+   * JWT auth token
+   */
+  200: {
+    token: string
+  }
+}
+
+export type AuthLoginResponse = AuthLoginResponses[keyof AuthLoginResponses]
+
+export type AuthVerifyData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/api/auth/verify"
+}
+
+export type AuthVerifyErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+}
+
+export type AuthVerifyError = AuthVerifyErrors[keyof AuthVerifyErrors]
+
+export type AuthVerifyResponses = {
+  /**
+   * Token is valid
+   */
+  200: {
+    valid: true
+  }
+}
+
+export type AuthVerifyResponse = AuthVerifyResponses[keyof AuthVerifyResponses]
+
+export type AuthLogoutData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/api/auth/logout"
+}
+
+export type AuthLogoutErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+}
+
+export type AuthLogoutError = AuthLogoutErrors[keyof AuthLogoutErrors]
+
+export type AuthLogoutResponses = {
+  /**
+   * Logged out
+   */
+  200: unknown
+}
+
 export type AuthRemoveData = {
   body?: never
   path: {
@@ -8397,6 +8502,233 @@ export type AppAgentsResponses = {
 
 export type AppAgentsResponse = AppAgentsResponses[keyof AppAgentsResponses]
 
+export type AppRulesData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/rule"
+}
+
+export type AppRulesErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type AppRulesError = AppRulesErrors[keyof AppRulesErrors]
+
+export type AppRulesResponses = {
+  /**
+   * List of rule files
+   */
+  200: Array<{
+    id: string
+    title: string
+    path: string
+    source: "project" | "global" | "instruction"
+    kind: "agents" | "claude" | "config"
+    exists: boolean
+    active: boolean
+    editable: boolean
+    remote: boolean
+    blockedBy?: string
+    content?: string
+  }>
+}
+
+export type AppRulesResponse = AppRulesResponses[keyof AppRulesResponses]
+
+export type AppRuleUpdateData = {
+  body?: {
+    id: string
+    content: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/rule"
+}
+
+export type AppRuleUpdateErrors = {
+  /**
+   * SkillManageError | InvalidRequestError
+   */
+  400: SkillManageError | InvalidRequestError
+}
+
+export type AppRuleUpdateError = AppRuleUpdateErrors[keyof AppRuleUpdateErrors]
+
+export type AppRuleUpdateResponses = {
+  /**
+   * Updated rule file
+   */
+  200: {
+    id: string
+    title: string
+    path: string
+    source: "project" | "global" | "instruction"
+    kind: "agents" | "claude" | "config"
+    exists: boolean
+    active: boolean
+    editable: boolean
+    remote: boolean
+    blockedBy?: string
+    content?: string
+  }
+}
+
+export type AppRuleUpdateResponse = AppRuleUpdateResponses[keyof AppRuleUpdateResponses]
+
+export type AppRuleCreateData = {
+  body?: {
+    source: "project" | "global"
+    content: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/rule"
+}
+
+export type AppRuleCreateErrors = {
+  /**
+   * SkillManageError | InvalidRequestError
+   */
+  400: SkillManageError | InvalidRequestError
+}
+
+export type AppRuleCreateError = AppRuleCreateErrors[keyof AppRuleCreateErrors]
+
+export type AppRuleCreateResponses = {
+  /**
+   * Created rule file
+   */
+  200: {
+    id: string
+    title: string
+    path: string
+    source: "project" | "global" | "instruction"
+    kind: "agents" | "claude" | "config"
+    exists: boolean
+    active: boolean
+    editable: boolean
+    remote: boolean
+    blockedBy?: string
+    content?: string
+  }
+}
+
+export type AppRuleCreateResponse = AppRuleCreateResponses[keyof AppRuleCreateResponses]
+
+export type AppRuleFileData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    id: string
+  }
+  url: "/rule/file"
+}
+
+export type AppRuleFileErrors = {
+  /**
+   * SkillManageError | InvalidRequestError
+   */
+  400: SkillManageError | InvalidRequestError
+}
+
+export type AppRuleFileError = AppRuleFileErrors[keyof AppRuleFileErrors]
+
+export type AppRuleFileResponses = {
+  /**
+   * Rule file content
+   */
+  200: {
+    id: string
+    title: string
+    path: string
+    content: string
+    editable: boolean
+  }
+}
+
+export type AppRuleFileResponse = AppRuleFileResponses[keyof AppRuleFileResponses]
+
+export type AppAgentGenerateData = {
+  body?: {
+    name: string
+    description?: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/agent/generate"
+}
+
+export type AppAgentGenerateErrors = {
+  /**
+   * SkillManageError | InvalidRequestError
+   */
+  400: SkillManageError | InvalidRequestError
+}
+
+export type AppAgentGenerateError = AppAgentGenerateErrors[keyof AppAgentGenerateErrors]
+
+export type AppAgentGenerateResponses = {
+  /**
+   * Generated agent draft
+   */
+  200: {
+    name: string
+    description: string
+    mode: "subagent" | "primary" | "all"
+    prompt: string
+  }
+}
+
+export type AppAgentGenerateResponse = AppAgentGenerateResponses[keyof AppAgentGenerateResponses]
+
+export type AppSkillDeleteData = {
+  body?: {
+    location: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/skill"
+}
+
+export type AppSkillDeleteErrors = {
+  /**
+   * SkillManageError | InvalidRequestError
+   */
+  400: SkillManageError | InvalidRequestError
+}
+
+export type AppSkillDeleteError = AppSkillDeleteErrors[keyof AppSkillDeleteErrors]
+
+export type AppSkillDeleteResponses = {
+  /**
+   * Deleted skill
+   */
+  200: boolean
+}
+
+export type AppSkillDeleteResponse = AppSkillDeleteResponses[keyof AppSkillDeleteResponses]
+
 export type AppSkillsData = {
   body?: never
   path?: never
@@ -8429,6 +8761,158 @@ export type AppSkillsResponses = {
 }
 
 export type AppSkillsResponse = AppSkillsResponses[keyof AppSkillsResponses]
+
+export type AppSkillUpdateData = {
+  body?: {
+    location: string
+    file?: string
+    content: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/skill"
+}
+
+export type AppSkillUpdateErrors = {
+  /**
+   * SkillManageError | InvalidRequestError
+   */
+  400: SkillManageError | InvalidRequestError
+}
+
+export type AppSkillUpdateError = AppSkillUpdateErrors[keyof AppSkillUpdateErrors]
+
+export type AppSkillUpdateResponses = {
+  /**
+   * Updated skill
+   */
+  200: {
+    name: string
+    description?: string
+    location: string
+    content: string
+  }
+}
+
+export type AppSkillUpdateResponse = AppSkillUpdateResponses[keyof AppSkillUpdateResponses]
+
+export type AppSkillCreateData = {
+  body?: {
+    name: string
+    description?: string
+    source: "project" | "global"
+    content: string
+    files?: Array<{
+      path: string
+      content: string
+    }>
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/skill"
+}
+
+export type AppSkillCreateErrors = {
+  /**
+   * SkillManageError | InvalidRequestError
+   */
+  400: SkillManageError | InvalidRequestError
+}
+
+export type AppSkillCreateError = AppSkillCreateErrors[keyof AppSkillCreateErrors]
+
+export type AppSkillCreateResponses = {
+  /**
+   * Created skill
+   */
+  200: {
+    name: string
+    description?: string
+    location: string
+    content: string
+  }
+}
+
+export type AppSkillCreateResponse = AppSkillCreateResponses[keyof AppSkillCreateResponses]
+
+export type AppSkillFileData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    location: string
+    file?: string
+  }
+  url: "/skill/file"
+}
+
+export type AppSkillFileErrors = {
+  /**
+   * SkillManageError | InvalidRequestError
+   */
+  400: SkillManageError | InvalidRequestError
+}
+
+export type AppSkillFileError = AppSkillFileErrors[keyof AppSkillFileErrors]
+
+export type AppSkillFileResponses = {
+  /**
+   * Skill markdown document
+   */
+  200: {
+    content: string
+    editable: boolean
+    path: string
+    files: Array<{
+      path: string
+      type: "file"
+    }>
+  }
+}
+
+export type AppSkillFileResponse = AppSkillFileResponses[keyof AppSkillFileResponses]
+
+export type AppSkillGenerateData = {
+  body?: {
+    name: string
+    description?: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/skill/generate"
+}
+
+export type AppSkillGenerateErrors = {
+  /**
+   * SkillManageError | InvalidRequestError
+   */
+  400: SkillManageError | InvalidRequestError
+}
+
+export type AppSkillGenerateError = AppSkillGenerateErrors[keyof AppSkillGenerateErrors]
+
+export type AppSkillGenerateResponses = {
+  /**
+   * Generated skill markdown
+   */
+  200: {
+    name: string
+    description: string
+    content: string
+  }
+}
+
+export type AppSkillGenerateResponse = AppSkillGenerateResponses[keyof AppSkillGenerateResponses]
 
 export type LspStatusData = {
   body?: never
@@ -11402,6 +11886,200 @@ export type V2AgentListResponses = {
 
 export type V2AgentListResponse = V2AgentListResponses[keyof V2AgentListResponses]
 
+export type V2AgentCreateData = {
+  body: {
+    name: string
+    location: "project" | "global"
+    description?: string
+    mode?: "subagent" | "primary" | "all"
+    model?: string
+    temperature?: number
+    color?: string
+    hidden?: boolean
+    disable?: boolean
+    permission?: {
+      [key: string]: "allow" | "ask" | "deny"
+    }
+    prompt?: string
+  }
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent"
+}
+
+export type V2AgentCreateErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2AgentCreateError = V2AgentCreateErrors[keyof V2AgentCreateErrors]
+
+export type V2AgentCreateResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: {
+      name: string
+      path: string
+    }
+  }
+}
+
+export type V2AgentCreateResponse = V2AgentCreateResponses[keyof V2AgentCreateResponses]
+
+export type V2AgentDeleteData = {
+  body?: never
+  path: {
+    id: string
+  }
+  query: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+    agentLocation: "project" | "global"
+  }
+  url: "/api/agent/{id}"
+}
+
+export type V2AgentDeleteErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2AgentDeleteError = V2AgentDeleteErrors[keyof V2AgentDeleteErrors]
+
+export type V2AgentDeleteResponses = {
+  /**
+   * <No Content>
+   */
+  204: void
+}
+
+export type V2AgentDeleteResponse = V2AgentDeleteResponses[keyof V2AgentDeleteResponses]
+
+export type V2AgentReadData = {
+  body?: never
+  path: {
+    id: string
+  }
+  query: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+    agentLocation: "project" | "global"
+  }
+  url: "/api/agent/{id}"
+}
+
+export type V2AgentReadErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2AgentReadError = V2AgentReadErrors[keyof V2AgentReadErrors]
+
+export type V2AgentReadResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: {
+      name: string
+      path: string
+      content: string
+      frontmatter: {
+        [key: string]: unknown
+      }
+      body: string
+    }
+  }
+}
+
+export type V2AgentReadResponse = V2AgentReadResponses[keyof V2AgentReadResponses]
+
+export type V2AgentUpdateData = {
+  body: {
+    location: "project" | "global"
+    description?: string
+    mode?: "subagent" | "primary" | "all"
+    model?: string
+    temperature?: number
+    color?: string
+    hidden?: boolean
+    disable?: boolean
+    permission?: {
+      [key: string]: "allow" | "ask" | "deny"
+    }
+    prompt?: string
+  }
+  path: {
+    id: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent/{id}"
+}
+
+export type V2AgentUpdateErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2AgentUpdateError = V2AgentUpdateErrors[keyof V2AgentUpdateErrors]
+
+export type V2AgentUpdateResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: {
+      name: string
+      path: string
+    }
+  }
+}
+
+export type V2AgentUpdateResponse = V2AgentUpdateResponses[keyof V2AgentUpdateResponses]
+
 export type V2SessionListData = {
   body?: never
   path?: never
@@ -12732,6 +13410,43 @@ export type V2FsFindResponses = {
 }
 
 export type V2FsFindResponse = V2FsFindResponses[keyof V2FsFindResponses]
+
+export type V2FsWriteData = {
+  body: FileSystemWriteInput
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/fs/write"
+}
+
+export type V2FsWriteErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2FsWriteError = V2FsWriteErrors[keyof V2FsWriteErrors]
+
+export type V2FsWriteResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: null
+  }
+}
+
+export type V2FsWriteResponse = V2FsWriteResponses[keyof V2FsWriteResponses]
 
 export type V2CommandListData = {
   body?: never

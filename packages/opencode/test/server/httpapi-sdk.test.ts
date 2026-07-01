@@ -528,6 +528,7 @@ describe("HttpApi SDK", () => {
         const findFiles = yield* capture(() => sdk.find.files({ query: "hello", limit: 10 }))
         const findText = yield* capture(() => sdk.find.text({ pattern: "sdk-parity" }))
         const agents = yield* capture(() => sdk.app.agents())
+        const rules = yield* capture(() => sdk.app.rules())
         const skills = yield* capture(() => sdk.app.skills())
         const tools = yield* capture(() => sdk.tool.ids())
         const vcs = yield* capture(() => sdk.vcs.get())
@@ -547,6 +548,7 @@ describe("HttpApi SDK", () => {
             findFiles,
             findText,
             agents,
+            rules,
             skills,
             tools,
             vcs,

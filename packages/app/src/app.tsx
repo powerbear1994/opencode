@@ -9,7 +9,7 @@ import { Font } from "@opencode-ai/ui/font"
 import { Splash } from "@opencode-ai/ui/logo"
 import { ThemeProvider } from "@opencode-ai/ui/theme/context"
 import { MetaProvider } from "@solidjs/meta"
-import { type BaseRouterProps, Navigate, Route, Router, useParams, useSearchParams } from "@solidjs/router"
+import { type BaseRouterProps, Navigate, Route, Router, useNavigate, useParams, useSearchParams } from "@solidjs/router"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import { Effect } from "effect"
 import {
@@ -69,6 +69,7 @@ const DevelopmentPage = lazy(() => import("@/features/development/page"))
 const TestPage = lazy(() => import("@/features/test/page"))
 const SkillsPage = lazy(() => import("@/features/skills/page"))
 const AgentsPage = lazy(() => import("@/features/agents/page"))
+const RulesPage = lazy(() => import("@/features/rules/page"))
 const NewSession = lazy(() => import("@/pages/new-session"))
 
 const workflowSessionTitle = (sourceMode: string | undefined) =>
@@ -167,6 +168,7 @@ function ResolvedTargetSessionRoute() {
   const settings = useSettings()
   const tabs = useTabs()
   const sync = useServerSync()
+  const navigate = useNavigate()
   const serverKey = createMemo(() => requireServerKey(params.serverKey))
   const cached = createMemo(() => sync().session.lineage.peek(params.id))
   const [resolved] = createResource(
@@ -176,7 +178,11 @@ function ResolvedTargetSessionRoute() {
     },
     ({ id, server, sync }) =>
       sync.session.lineage.resolve(id).catch((error) => {
-        if (isSessionNotFoundError(error, id)) tabs.removeSessionTab({ server, sessionId: id })
+        if (isSessionNotFoundError(error, id)) {
+          tabs.removeSessionTab({ server, sessionId: id })
+          navigate("/")
+          return undefined
+        }
         throw error
       }),
   )
@@ -634,6 +640,7 @@ function Routes() {
       <Route component={WorkflowRouteLayout}>
         <Route path="/skills" component={SkillsPage} />
         <Route path="/agents" component={AgentsPage} />
+        <Route path="/rules" component={RulesPage} />
         <Route path="/requirements" component={RequirementsPage} />
         <Route path="/design" component={DesignPage} />
         <Route path="/development" component={DevelopmentPage} />

@@ -94,12 +94,18 @@
   border-bottom: 0.5px solid var(--v2-border-border-base);
 }
 
+[data-component="settings-v2-row"][data-layout="stacked"] {
+  align-items: stretch;
+  flex-direction: column;
+  gap: 12px;
+}
+
 [data-component="settings-v2-row"]:last-child {
   border-bottom: none;
 }
 
 @media (min-width: 640px) {
-  [data-component="settings-v2-row"] {
+  [data-component="settings-v2-row"][data-layout="inline"] {
     flex-wrap: nowrap;
   }
 }
@@ -135,6 +141,11 @@
   justify-content: flex-end;
 }
 
+[data-component="settings-v2-row"][data-layout="stacked"] [data-slot="settings-v2-row-control"] {
+  min-width: 0;
+  justify-content: stretch;
+}
+
 [data-slot="settings-v2-row-control"] > div:has([data-component="switch"]),
 [data-slot="settings-v2-row-control"] > [data-component="switch"] {
   display: inline-flex;
@@ -143,7 +154,7 @@
 }
 
 @media (min-width: 640px) {
-  [data-slot="settings-v2-row-control"] {
+  [data-component="settings-v2-row"][data-layout="inline"] [data-slot="settings-v2-row-control"] {
     width: auto;
     flex-shrink: 0;
   }

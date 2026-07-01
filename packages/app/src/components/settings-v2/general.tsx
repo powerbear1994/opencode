@@ -361,6 +361,7 @@ export const SettingsGeneralV2: Component = () => {
         <SettingsRowV2
           title={language.t("settings.general.row.remoteServiceUrl.title")}
           description={language.t("settings.general.row.remoteServiceUrl.description")}
+          layout="stacked"
         >
           <TextInputV2
             type="url"
@@ -368,6 +369,9 @@ export const SettingsGeneralV2: Component = () => {
             data-action="settings-remote-service-url"
             value={settings.remoteService.baseUrl()}
             placeholder={language.t("settings.general.row.remoteServiceUrl.placeholder")}
+            showCopyButton={!!settings.remoteService.baseUrl()}
+            copyLabel={language.t("session.share.copy.copyLink")}
+            onCopyClick={() => navigator.clipboard.writeText(settings.remoteService.baseUrl())}
             spellcheck={false}
             autocorrect="off"
             autocomplete="off"

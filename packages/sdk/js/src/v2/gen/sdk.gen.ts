@@ -4,17 +4,43 @@ import { client } from "./client.gen.js"
 import { buildClientParams, type Client, type Options as Options2, type TDataShape } from "./client/index.js"
 import type {
   AgentPartInput,
+  AppAgentGenerateErrors,
+  AppAgentGenerateResponses,
   AppAgentsErrors,
   AppAgentsResponses,
   AppLogErrors,
   AppLogResponses,
+  AppRuleCreateErrors,
+  AppRuleCreateResponses,
+  AppRuleFileErrors,
+  AppRuleFileResponses,
+  AppRulesErrors,
+  AppRulesResponses,
+  AppRuleUpdateErrors,
+  AppRuleUpdateResponses,
+  AppSkillCreateErrors,
+  AppSkillCreateResponses,
+  AppSkillDeleteErrors,
+  AppSkillDeleteResponses,
+  AppSkillFileErrors,
+  AppSkillFileResponses,
+  AppSkillGenerateErrors,
+  AppSkillGenerateResponses,
   AppSkillsErrors,
   AppSkillsResponses,
+  AppSkillUpdateErrors,
+  AppSkillUpdateResponses,
   Auth as Auth3,
+  AuthLoginErrors,
+  AuthLoginResponses,
+  AuthLogoutErrors,
+  AuthLogoutResponses,
   AuthRemoveErrors,
   AuthRemoveResponses,
   AuthSetErrors,
   AuthSetResponses,
+  AuthVerifyErrors,
+  AuthVerifyResponses,
   CommandListErrors,
   CommandListResponses,
   Config as Config3,
@@ -68,6 +94,7 @@ import type {
   FileReadResponses,
   FileStatusErrors,
   FileStatusResponses,
+  FileSystemWriteInput,
   FindFilesErrors,
   FindFilesResponses,
   FindSymbolsErrors,
@@ -259,8 +286,16 @@ import type {
   TuiShowToastResponses,
   TuiSubmitPromptErrors,
   TuiSubmitPromptResponses,
+  V2AgentCreateErrors,
+  V2AgentCreateResponses,
+  V2AgentDeleteErrors,
+  V2AgentDeleteResponses,
   V2AgentListErrors,
   V2AgentListResponses,
+  V2AgentReadErrors,
+  V2AgentReadResponses,
+  V2AgentUpdateErrors,
+  V2AgentUpdateResponses,
   V2CommandListErrors,
   V2CommandListResponses,
   V2CredentialRemoveErrors,
@@ -275,6 +310,8 @@ import type {
   V2FsListResponses,
   V2FsReadErrors,
   V2FsReadResponses,
+  V2FsWriteErrors,
+  V2FsWriteResponses,
   V2HealthGetErrors,
   V2HealthGetResponses,
   V2IntegrationAttemptCancelErrors,
@@ -435,6 +472,65 @@ class HeyApiRegistry<T> {
 
 export class Auth extends HeyApiClient {
   /**
+   * User login
+   *
+   * Authenticate with username and password to receive a JWT token.
+   */
+  public login<ThrowOnError extends boolean = false>(
+    parameters?: {
+      username?: string
+      password?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "username" },
+            { in: "body", key: "password" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<AuthLoginResponses, AuthLoginErrors, ThrowOnError>({
+      url: "/api/auth/login",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Verify token
+   *
+   * Check whether the current Bearer JWT token is still valid.
+   */
+  public verify<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<AuthVerifyResponses, AuthVerifyErrors, ThrowOnError>({
+      url: "/api/auth/verify",
+      ...options,
+    })
+  }
+
+  /**
+   * Logout
+   *
+   * End the client session. JWT tokens expire automatically.
+   */
+  public logout<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).post<AuthLogoutResponses, AuthLogoutErrors, ThrowOnError>({
+      url: "/api/auth/logout",
+      ...options,
+    })
+  }
+
+  /**
    * Remove auth credentials
    *
    * Remove authentication credentials
@@ -566,6 +662,222 @@ export class App extends HeyApiClient {
   }
 
   /**
+   * List rules
+   *
+   * Get effective and candidate instruction rule files for the current workspace.
+   */
+  public rules<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<AppRulesResponses, AppRulesErrors, ThrowOnError>({
+      url: "/rule",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Update rule file
+   *
+   * Update an editable instruction rule file.
+   */
+  public ruleUpdate<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      id?: string
+      content?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "id" },
+            { in: "body", key: "content" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<AppRuleUpdateResponses, AppRuleUpdateErrors, ThrowOnError>({
+      url: "/rule",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Create rule file
+   *
+   * Create a project or global AGENTS.md rule file.
+   */
+  public ruleCreate<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      source?: "project" | "global"
+      content?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "source" },
+            { in: "body", key: "content" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<AppRuleCreateResponses, AppRuleCreateErrors, ThrowOnError>({
+      url: "/rule",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Read rule file
+   *
+   * Read the raw content for an editable instruction rule file.
+   */
+  public ruleFile<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      id: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "id" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<AppRuleFileResponses, AppRuleFileErrors, ThrowOnError>({
+      url: "/rule/file",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Generate agent
+   *
+   * Generate an agent draft using AI based on name and description.
+   */
+  public agentGenerate<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      name?: string
+      description?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "name" },
+            { in: "body", key: "description" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<AppAgentGenerateResponses, AppAgentGenerateErrors, ThrowOnError>({
+      url: "/agent/generate",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Delete skill
+   *
+   * Delete an available disk-backed skill.
+   */
+  public skillDelete<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      location?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "location" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<AppSkillDeleteResponses, AppSkillDeleteErrors, ThrowOnError>({
+      url: "/skill",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
    * List skills
    *
    * Get a list of all available skills in the OpenCode system.
@@ -592,6 +904,168 @@ export class App extends HeyApiClient {
       url: "/skill",
       ...options,
       ...params,
+    })
+  }
+
+  /**
+   * Update skill
+   *
+   * Update the raw SKILL.md content for an available skill.
+   */
+  public skillUpdate<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      location?: string
+      file?: string
+      content?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "location" },
+            { in: "body", key: "file" },
+            { in: "body", key: "content" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<AppSkillUpdateResponses, AppSkillUpdateErrors, ThrowOnError>({
+      url: "/skill",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Create skill
+   *
+   * Create a new project or global skill.
+   */
+  public skillCreate<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      name?: string
+      description?: string
+      source?: "project" | "global"
+      content?: string
+      files?: Array<{
+        path: string
+        content: string
+      }>
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "name" },
+            { in: "body", key: "description" },
+            { in: "body", key: "source" },
+            { in: "body", key: "content" },
+            { in: "body", key: "files" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<AppSkillCreateResponses, AppSkillCreateErrors, ThrowOnError>({
+      url: "/skill",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Read skill document
+   *
+   * Read the raw SKILL.md content for an available skill.
+   */
+  public skillFile<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      location: string
+      file?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "location" },
+            { in: "query", key: "file" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<AppSkillFileResponses, AppSkillFileErrors, ThrowOnError>({
+      url: "/skill/file",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Generate skill
+   *
+   * Generate a SKILL.md document using AI based on name and description.
+   */
+  public skillGenerate<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      name?: string
+      description?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "name" },
+            { in: "body", key: "description" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<AppSkillGenerateResponses, AppSkillGenerateErrors, ThrowOnError>({
+      url: "/skill/generate",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 }
@@ -5072,6 +5546,212 @@ export class Agent extends HeyApiClient {
       ...params,
     })
   }
+
+  /**
+   * Create agent
+   *
+   * Create a new custom agent file.
+   */
+  public create<ThrowOnError extends boolean = false>(
+    parameters?: {
+      query_location?: {
+        directory?: string
+        workspace?: string
+      }
+      name?: string
+      body_location?: "project" | "global"
+      description?: string
+      mode?: "subagent" | "primary" | "all"
+      model?: string
+      temperature?: number
+      color?: string
+      hidden?: boolean
+      disable?: boolean
+      permission?: {
+        [key: string]: "allow" | "ask" | "deny"
+      }
+      prompt?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            {
+              in: "query",
+              key: "query_location",
+              map: "location",
+            },
+            { in: "body", key: "name" },
+            {
+              in: "body",
+              key: "body_location",
+              map: "location",
+            },
+            { in: "body", key: "description" },
+            { in: "body", key: "mode" },
+            { in: "body", key: "model" },
+            { in: "body", key: "temperature" },
+            { in: "body", key: "color" },
+            { in: "body", key: "hidden" },
+            { in: "body", key: "disable" },
+            { in: "body", key: "permission" },
+            { in: "body", key: "prompt" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<V2AgentCreateResponses, V2AgentCreateErrors, ThrowOnError>({
+      url: "/api/agent",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Delete agent
+   *
+   * Delete a custom agent file.
+   */
+  public delete<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+      location?: {
+        directory?: string
+        workspace?: string
+      }
+      agentLocation: "project" | "global"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "id" },
+            { in: "query", key: "location" },
+            { in: "query", key: "agentLocation" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<V2AgentDeleteResponses, V2AgentDeleteErrors, ThrowOnError>({
+      url: "/api/agent/{id}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Read agent file
+   *
+   * Read the raw markdown file for an agent.
+   */
+  public read<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+      location?: {
+        directory?: string
+        workspace?: string
+      }
+      agentLocation: "project" | "global"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "id" },
+            { in: "query", key: "location" },
+            { in: "query", key: "agentLocation" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<V2AgentReadResponses, V2AgentReadErrors, ThrowOnError>({
+      url: "/api/agent/{id}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Update agent
+   *
+   * Update an existing custom agent file.
+   */
+  public update<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+      query_location?: {
+        directory?: string
+        workspace?: string
+      }
+      body_location?: "project" | "global"
+      description?: string
+      mode?: "subagent" | "primary" | "all"
+      model?: string
+      temperature?: number
+      color?: string
+      hidden?: boolean
+      disable?: boolean
+      permission?: {
+        [key: string]: "allow" | "ask" | "deny"
+      }
+      prompt?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "id" },
+            {
+              in: "query",
+              key: "query_location",
+              map: "location",
+            },
+            {
+              in: "body",
+              key: "body_location",
+              map: "location",
+            },
+            { in: "body", key: "description" },
+            { in: "body", key: "mode" },
+            { in: "body", key: "model" },
+            { in: "body", key: "temperature" },
+            { in: "body", key: "color" },
+            { in: "body", key: "hidden" },
+            { in: "body", key: "disable" },
+            { in: "body", key: "permission" },
+            { in: "body", key: "prompt" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).put<V2AgentUpdateResponses, V2AgentUpdateErrors, ThrowOnError>({
+      url: "/api/agent/{id}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
 }
 
 export class Revert extends HeyApiClient {
@@ -6283,6 +6963,44 @@ export class Fs extends HeyApiClient {
       url: "/api/fs/find",
       ...options,
       ...params,
+    })
+  }
+
+  /**
+   * Write file
+   *
+   * Write one UTF-8 text file relative to the requested location.
+   */
+  public write<ThrowOnError extends boolean = false>(
+    parameters: {
+      location?: {
+        directory?: string
+        workspace?: string
+      }
+      fileSystemWriteInput: FileSystemWriteInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "location" },
+            { key: "fileSystemWriteInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<V2FsWriteResponses, V2FsWriteErrors, ThrowOnError>({
+      url: "/api/fs/write",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 }

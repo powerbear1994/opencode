@@ -124,7 +124,7 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
   const hasProjects = createMemo(() => layout.projects.list().length > 0)
   const nav = createMemo(() => (useV2Titlebar() ? settings.general.showNavigation() : true))
   const workflowRoute = createMemo(() =>
-    ["/skills", "/agents", "/requirements", "/design", "/development", "/test"].includes(location.pathname),
+    ["/skills", "/agents", "/rules", "/requirements", "/design", "/development", "/test"].includes(location.pathname),
   )
   const statusDirectory = createMemo(() => searchParams.project || decode64(params.dir))
   const skillsHref = createMemo(() => {
@@ -136,6 +136,11 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
     const directory = statusDirectory()
     if (!directory) return "/agents"
     return `/agents?project=${encodeURIComponent(directory)}`
+  })
+  const rulesHref = createMemo(() => {
+    const directory = statusDirectory()
+    if (!directory) return "/rules"
+    return `/rules?project=${encodeURIComponent(directory)}`
   })
   const updateState = createMemo<TitlebarUpdatePillState>(() => {
     const installing = props.update?.installing() ?? false
@@ -172,6 +177,11 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
       active: location.pathname === "/agents",
       label: language.t("agents.title"),
       onOpen: () => navigate(agentsHref()),
+    },
+    rules: {
+      active: location.pathname === "/rules",
+      label: "规则",
+      onOpen: () => navigate(rulesHref()),
     },
   }))
 
@@ -702,6 +712,19 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
                   <Icon size="small" name="models" />
                 </A>
               </Tooltip>
+              <Tooltip placement="bottom" value="规则" openDelay={2000}>
+                <A
+                  href={rulesHref()}
+                  data-component="button"
+                  data-variant="ghost"
+                  data-size="normal"
+                  class="titlebar-icon w-8 h-6 p-0 box-border shrink-0"
+                  aria-label="规则"
+                  aria-current={location.pathname === "/rules" ? "page" : undefined}
+                >
+                  <Icon size="small" name="open-file" />
+                </A>
+              </Tooltip>
               <Show when={!location.pathname.includes("/session")}>
                 <Tooltip placement="bottom" value={language.t("status.popover.trigger")}>
                   <TitlebarStatusPopover directory={statusDirectory()} />
@@ -770,6 +793,11 @@ type TitlebarV2RightState = {
     label: string
     onOpen: () => void
   }
+  rules: {
+    active: boolean
+    label: string
+    onOpen: () => void
+  }
 }
 
 function TitlebarV2Right(props: { state: TitlebarV2RightState }) {
@@ -802,6 +830,19 @@ function TitlebarV2Right(props: { state: TitlebarV2RightState }) {
           onClick={props.state.agents.onOpen}
           aria-label={props.state.agents.label}
           aria-current={props.state.agents.active ? "page" : undefined}
+        />
+      </TooltipV2>
+      <TooltipV2 placement="bottom" value={props.state.rules.label}>
+        <IconButtonV2
+          type="button"
+          variant="ghost-muted"
+          size="large"
+          class="!w-9 shrink-0"
+          state={props.state.rules.active ? "pressed" : undefined}
+          icon={<IconV2 name="edit" />}
+          onClick={props.state.rules.onOpen}
+          aria-label={props.state.rules.label}
+          aria-current={props.state.rules.active ? "page" : undefined}
         />
       </TooltipV2>
       <Show when={props.state.status.visible}>

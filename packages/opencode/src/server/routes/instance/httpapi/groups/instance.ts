@@ -90,6 +90,43 @@ export const SkillGenerateResult = Schema.Struct({
   content: Schema.String,
 })
 
+export const RuleInfo = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  path: Schema.String,
+  source: Schema.Literals(["project", "global", "instruction"]),
+  kind: Schema.Literals(["agents", "claude", "config"]),
+  exists: Schema.Boolean,
+  active: Schema.Boolean,
+  editable: Schema.Boolean,
+  remote: Schema.Boolean,
+  blockedBy: Schema.optional(Schema.String),
+  content: Schema.optional(Schema.String),
+})
+
+export const RuleFileQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  id: Schema.String,
+})
+
+export const RuleWritePayload = Schema.Struct({
+  id: Schema.String,
+  content: Schema.String,
+})
+
+export const RuleCreatePayload = Schema.Struct({
+  source: Schema.Literals(["project", "global"]),
+  content: Schema.String,
+})
+
+export const RuleFileResult = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  path: Schema.String,
+  content: Schema.String,
+  editable: Schema.Boolean,
+})
+
 export const AgentGeneratePayload = Schema.Struct({
   name: Schema.String,
   description: Schema.optional(Schema.String),
@@ -124,6 +161,8 @@ export const InstancePaths = {
   command: "/command",
   agent: "/agent",
   agentGenerate: "/agent/generate",
+  rule: "/rule",
+  ruleFile: "/rule/file",
   skill: "/skill",
   skillFile: "/skill/file",
   skillGenerate: "/skill/generate",
@@ -230,6 +269,51 @@ export const InstanceApi = HttpApi.make("instance")
             identifier: "app.agents",
             summary: "List agents",
             description: "Get a list of all available AI agents in the OpenCode system.",
+          }),
+        ),
+        HttpApiEndpoint.get("rule", InstancePaths.rule, {
+          query: WorkspaceRoutingQuery,
+          success: described(Schema.Array(RuleInfo), "List of rule files"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "app.rules",
+            summary: "List rules",
+            description: "Get effective and candidate instruction rule files for the current workspace.",
+          }),
+        ),
+        HttpApiEndpoint.get("ruleFile", InstancePaths.ruleFile, {
+          query: RuleFileQuery,
+          success: described(RuleFileResult, "Rule file content"),
+          error: ApiSkillManageError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "app.ruleFile",
+            summary: "Read rule file",
+            description: "Read the raw content for an editable instruction rule file.",
+          }),
+        ),
+        HttpApiEndpoint.post("ruleCreate", InstancePaths.rule, {
+          query: WorkspaceRoutingQuery,
+          payload: RuleCreatePayload,
+          success: described(RuleInfo, "Created rule file"),
+          error: ApiSkillManageError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "app.ruleCreate",
+            summary: "Create rule file",
+            description: "Create a project or global AGENTS.md rule file.",
+          }),
+        ),
+        HttpApiEndpoint.patch("ruleUpdate", InstancePaths.rule, {
+          query: WorkspaceRoutingQuery,
+          payload: RuleWritePayload,
+          success: described(RuleInfo, "Updated rule file"),
+          error: ApiSkillManageError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "app.ruleUpdate",
+            summary: "Update rule file",
+            description: "Update an editable instruction rule file.",
           }),
         ),
         HttpApiEndpoint.post("agentGenerate", InstancePaths.agentGenerate, {

@@ -5,11 +5,12 @@ export interface SettingsRowV2Props {
   title: string | JSX.Element
   description: string | JSX.Element
   children: JSX.Element
+  layout?: "inline" | "stacked"
 }
 
 export const SettingsRowV2: Component<SettingsRowV2Props> = (props) => {
   return (
-    <div data-component="settings-v2-row">
+    <div data-component="settings-v2-row" data-layout={props.layout ?? "inline"}>
       <div data-slot="settings-v2-row-copy">
         <div data-slot="settings-v2-row-title">{props.title}</div>
         <div data-slot="settings-v2-row-description">{props.description}</div>

@@ -13,10 +13,11 @@ import {
   remoteServiceBaseUrlFromSettings,
   remoteServiceUrl,
 } from "@opencode-ai/app"
+import { createMockToken, isMockAuthToken, verifyWithServer } from "./auth-verify"
 
 const AUTH_STORE = "opencode.auth"
 const AUTH_TOKEN_KEY = "token"
-const MOCK_TOKEN_PREFIX = "mock:"
+export { isMockAuthToken } from "./auth-verify"
 
 export const authTokenRef = { current: "" }
 const [authServerUrl, setAuthServerUrlSignal] = createSignal<string>()
@@ -45,26 +46,6 @@ function getServerUrl() {
   return url
 }
 
-export function isMockAuthToken(token: string | undefined) {
-  return token?.startsWith(MOCK_TOKEN_PREFIX) === true
-}
-
-function createMockToken(username: string) {
-  return `${MOCK_TOKEN_PREFIX}${Date.now()}:${encodeURIComponent(username.trim() || "mock")}`
-}
-
-async function verifyWithServer(baseUrl: string, token: string): Promise<boolean> {
-  if (isMockAuthToken(token)) return true
-  try {
-    const resp = await fetch(remoteServiceUrl(baseUrl, "/api/auth/verify"), {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-    return resp.ok
-  } catch {
-    return false
-  }
-}
-
 export function AuthProvider(props: ParentProps) {
   const [storedToken, { mutate }] = createResource(
     () => window.api.storeGet(AUTH_STORE, AUTH_TOKEN_KEY).then((v) => (typeof v === "string" ? v : null)),
@@ -79,6 +60,8 @@ export function AuthProvider(props: ParentProps) {
   )
 
   const [validating, setValidating] = createSignal(true)
+  const [validatedToken, setValidatedToken] = createSignal<string>()
+  let validatingToken: string | undefined
 
   createEffect(() => {
     const value = storedRemoteServiceBaseUrl()
@@ -99,11 +82,19 @@ export function AuthProvider(props: ParentProps) {
 
     if (!baseUrl) return
 
+    if (validatedToken() === token || validatingToken === token) return
+    validatingToken = token
+
     // Verify existing token on startup
-    verifyWithServer(baseUrl, token).then((valid) => {
-      if (valid) {
+    verifyWithServer(baseUrl, token).then((result) => {
+      if (storedToken() !== token) return
+      validatingToken = undefined
+      setValidatedToken(token)
+
+      if (result === "valid" || result === "unreachable") {
         authTokenRef.current = token
-      } else {
+      }
+      if (result === "invalid") {
         void window.api.storeDelete(AUTH_STORE, AUTH_TOKEN_KEY)
         mutate(null)
         authTokenRef.current = ""

@@ -155,6 +155,19 @@ describe("isSessionNotFoundError", () => {
     expect(isSessionNotFoundError(new Error(body.message, { cause: { body, status: 404 } }), body.sessionID)).toBe(true)
   })
 
+  test("matches legacy NotFoundError session messages", () => {
+    const body = {
+      name: "NotFoundError",
+      data: {
+        message: "Error: Session not found: ses_legacy",
+      },
+    }
+
+    expect(isSessionNotFoundError(new Error("Session not found", { cause: { body, status: 404 } }), "ses_legacy")).toBe(
+      true,
+    )
+  })
+
   test("rejects errors for other sessions and other 404 responses", () => {
     const body = {
       _tag: "SessionNotFoundError",

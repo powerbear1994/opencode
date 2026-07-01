@@ -57,6 +57,11 @@ function locationData(validate: (value: any) => void) {
   }
 }
 
+function projectDirectory(ctx: { directory: string | undefined }) {
+  if (!ctx.directory) throw new Error("scenario should have a project directory")
+  return ctx.directory
+}
+
 const scenarios: Scenario[] = [
   http.protected
     .get("/global/health", "global.health")
@@ -141,6 +146,57 @@ const scenarios: Scenario[] = [
     .status(400, undefined, "status"),
   http.protected.get("/command", "command.list").json(200, array, "status"),
   http.protected.get("/agent", "app.agents").json(200, array, "status"),
+  http.protected.get("/rule", "app.rules").json(200, array, "status"),
+  http.protected
+    .post("/rule", "app.ruleCreate")
+    .mutating()
+    .at((ctx) => ({
+      path: "/rule",
+      headers: ctx.headers(),
+      body: { source: "project", content: "# Exercise Rules\n" },
+    }))
+    .json(
+      200,
+      (body, ctx) => {
+        object(body)
+        check(body.id === "project-agents", "rule create should return project AGENTS.md")
+        check(body.path === path.join(projectDirectory(ctx), "AGENTS.md"), "rule create should write in the scenario project")
+      },
+      "status",
+    ),
+  http.protected
+    .get("/rule/file", "app.ruleFile")
+    .seeded((ctx) => Effect.promise(() => Bun.write(path.join(projectDirectory(ctx), "AGENTS.md"), "# Exercise Rules\n")))
+    .at((ctx) => ({ path: "/rule/file?id=project-agents", headers: ctx.headers() }))
+    .json(
+      200,
+      (body) => {
+        object(body)
+        check(body.id === "project-agents", "rule file should read project AGENTS.md")
+        check(body.content === "# Exercise Rules\n", "rule file should return file content")
+      },
+      "status",
+    ),
+  http.protected
+    .patch("/rule", "app.ruleUpdate")
+    .mutating()
+    .seeded((ctx) => Effect.promise(() => Bun.write(path.join(projectDirectory(ctx), "AGENTS.md"), "# Exercise Rules\n")))
+    .at((ctx) => ({
+      path: "/rule",
+      headers: ctx.headers(),
+      body: { id: "project-agents", content: "# Updated Exercise Rules\n" },
+    }))
+    .jsonEffect(
+      200,
+      (body, ctx) =>
+        Effect.gen(function* () {
+          object(body)
+          check(body.id === "project-agents", "rule update should return project AGENTS.md")
+          const text = yield* Effect.promise(() => Bun.file(path.join(projectDirectory(ctx), "AGENTS.md")).text())
+          check(text === "# Updated Exercise Rules\n", "rule update should write file content")
+        }),
+      "status",
+    ),
   http.protected.get("/skill", "app.skills").json(200, array, "status"),
   http.protected.get("/lsp", "lsp.status").json(200, array),
   http.protected.get("/formatter", "formatter.status").json(200, array),

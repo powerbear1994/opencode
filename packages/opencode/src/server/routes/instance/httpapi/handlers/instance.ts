@@ -1,6 +1,8 @@
 import { Agent } from "@/agent/agent"
 import { Command } from "@/command"
+import { Config } from "@/config/config"
 import * as InstanceState from "@/effect/instance-state"
+import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Format } from "@/format"
 import { Global } from "@opencode-ai/core/global"
 import { LSP } from "@/lsp/lsp"
@@ -14,6 +16,8 @@ import {
   AgentGeneratePayload,
   ApiSkillManageError,
   ApiVcsApplyError,
+  RuleCreatePayload,
+  RuleWritePayload,
   SkillCreatePayload,
   SkillDeletePayload,
   SkillGeneratePayload,
@@ -30,6 +34,20 @@ import { LLMEvent } from "@opencode-ai/llm"
 import { MessageID, SessionID } from "@/session/schema"
 
 const DEFAULT_SKILL_DIRECTORIES = ["references", "scripts", "assets"]
+
+type RuleInfo = {
+  id: string
+  title: string
+  path: string
+  source: "project" | "global" | "instruction"
+  kind: "agents" | "claude" | "config"
+  exists: boolean
+  active: boolean
+  editable: boolean
+  remote: boolean
+  blockedBy?: string
+  content?: string
+}
 
 function skillDocument(input: { name: string; description?: string; content: string }) {
   if (parseSkillDocument(input.content)) return input.content
@@ -87,6 +105,14 @@ function normalizeSkillFilePath(file: string | undefined) {
 
 function skillPackageRoot(location: string) {
   return path.dirname(location)
+}
+
+function ruleTitle(rule: Pick<RuleInfo, "source" | "kind" | "path">) {
+  if (rule.source === "project" && rule.kind === "agents") return "项目 AGENTS.md"
+  if (rule.source === "project" && rule.kind === "claude") return "项目 CLAUDE.md"
+  if (rule.source === "global" && rule.kind === "agents") return "全局 AGENTS.md"
+  if (rule.source === "global" && rule.kind === "claude") return "全局 CLAUDE.md"
+  return rule.path.startsWith("http://") || rule.path.startsWith("https://") ? "远程 instructions" : "额外 instructions"
 }
 
 function extractMarkdown(text: string) {
@@ -204,6 +230,7 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
   Effect.gen(function* () {
     const agent = yield* Agent.Service
     const command = yield* Command.Service
+    const config = yield* Config.Service
     const format = yield* Format.Service
     const lsp = yield* LSP.Service
     const skill = yield* Skill.Service
@@ -211,6 +238,7 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
     const fs = yield* FSUtil.Service
     const llm = yield* LLM.Service
     const provider = yield* Provider.Service
+    const flags = yield* RuntimeFlags.Service
 
     const dispose = Effect.fn("InstanceHttpApi.dispose")(function* () {
       yield* markInstanceForDisposal(yield* InstanceState.context)
@@ -284,6 +312,207 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
           reason,
         },
       })
+
+    const readRuleContent = Effect.fn("InstanceHttpApi.rule.readContent")(function* (rule: RuleInfo) {
+      if (!rule.exists || rule.remote) return undefined
+      return yield* fs.readFileStringSafe(rule.path).pipe(Effect.catch(() => Effect.succeed(undefined)))
+    })
+
+    const configInstructions = Effect.fn("InstanceHttpApi.rule.configInstructions")(function* () {
+      const ctx = yield* InstanceState.context
+      const cfg = yield* config.get()
+      return yield* Effect.forEach(
+        cfg.instructions ?? [],
+        Effect.fnUntraced(function* (raw, index) {
+          const remote = raw.startsWith("https://") || raw.startsWith("http://")
+          if (remote) {
+            return [{
+              id: `instruction:${index}:${raw}`,
+              title: ruleTitle({ source: "instruction", kind: "config", path: raw }),
+              path: raw,
+              source: "instruction" as const,
+              kind: "config" as const,
+              exists: true,
+              active: true,
+              editable: false,
+              remote: true,
+            }]
+          }
+
+          const instruction = raw.startsWith("~/") ? path.join(Global.Path.home, raw.slice(2)) : raw
+          const matches = yield* (
+            path.isAbsolute(instruction)
+              ? fs.glob(path.basename(instruction), {
+                  cwd: path.dirname(instruction),
+                  absolute: true,
+                  include: "file",
+                })
+              : fs.globUp(instruction, ctx.directory, ctx.worktree)
+          ).pipe(Effect.catch(() => Effect.succeed([] as string[])))
+
+          if (matches.length > 0) {
+            return matches.map((item, itemIndex) => ({
+              id: `instruction:${index}:${itemIndex}:${item}`,
+              title: ruleTitle({ source: "instruction", kind: "config", path: item }),
+              path: item,
+              source: "instruction" as const,
+              kind: "config" as const,
+              exists: true,
+              active: true,
+              editable: true,
+              remote: false,
+            }))
+          }
+
+          return [{
+            id: `instruction:${index}:${raw}`,
+            title: ruleTitle({ source: "instruction", kind: "config", path: raw }),
+            path: raw,
+            source: "instruction" as const,
+            kind: "config" as const,
+            exists: false,
+            active: false,
+            editable: false,
+            remote: false,
+          }]
+        }),
+        { concurrency: 4 },
+      ).pipe(Effect.map((groups) => groups.flat()))
+    })
+
+    const getRuleList = Effect.fn("InstanceHttpApi.rule")(function* () {
+      const ctx = yield* InstanceState.context
+      const globalAgents = path.join(Global.Path.config, "AGENTS.md")
+      const globalClaude = path.join(Global.Path.home, ".claude", "CLAUDE.md")
+      const projectAgentsMatches = yield* fs.findUp("AGENTS.md", ctx.directory, ctx.worktree).pipe(
+        Effect.catch(() => Effect.succeed([] as string[])),
+      )
+      const projectClaudeMatches = flags.disableClaudeCodePrompt
+        ? []
+        : yield* fs.findUp("CLAUDE.md", ctx.directory, ctx.worktree).pipe(
+            Effect.catch(() => Effect.succeed([] as string[])),
+          )
+      const projectAgents = projectAgentsMatches[0] ?? path.join(ctx.directory, "AGENTS.md")
+      const projectClaude = projectClaudeMatches[0] ?? path.join(ctx.directory, "CLAUDE.md")
+      const globalAgentsExists = yield* fs.existsSafe(globalAgents)
+      const globalClaudeExists = !flags.disableClaudeCodePrompt && (yield* fs.existsSafe(globalClaude))
+      const projectAgentsExists = projectAgentsMatches.length > 0
+      const projectClaudeExists = projectClaudeMatches.length > 0
+      const rules: RuleInfo[] = [
+        {
+          id: "project-agents",
+          title: "项目 AGENTS.md",
+          path: projectAgents,
+          source: "project",
+          kind: "agents",
+          exists: projectAgentsExists,
+          active: projectAgentsExists,
+          editable: true,
+          remote: false,
+        },
+        {
+          id: "project-claude",
+          title: "项目 CLAUDE.md",
+          path: projectClaude,
+          source: "project",
+          kind: "claude",
+          exists: projectClaudeExists,
+          active: !projectAgentsExists && projectClaudeExists,
+          editable: !flags.disableClaudeCodePrompt,
+          remote: false,
+          blockedBy: projectAgentsExists ? "项目 AGENTS.md" : undefined,
+        },
+        {
+          id: "global-agents",
+          title: "全局 AGENTS.md",
+          path: globalAgents,
+          source: "global",
+          kind: "agents",
+          exists: globalAgentsExists,
+          active: globalAgentsExists,
+          editable: true,
+          remote: false,
+        },
+        {
+          id: "global-claude",
+          title: "全局 CLAUDE.md",
+          path: globalClaude,
+          source: "global",
+          kind: "claude",
+          exists: globalClaudeExists,
+          active: !globalAgentsExists && globalClaudeExists,
+          editable: !flags.disableClaudeCodePrompt,
+          remote: false,
+          blockedBy: globalAgentsExists ? "全局 AGENTS.md" : undefined,
+        },
+        ...(yield* configInstructions()),
+      ]
+
+      return yield* Effect.forEach(
+        rules.filter((rule) => rule.exists),
+        Effect.fnUntraced(function* (rule) {
+          const content = yield* readRuleContent(rule)
+          return content === undefined ? rule : { ...rule, content }
+        }),
+        { concurrency: 8 },
+      )
+    })
+
+    const findRule = Effect.fn("InstanceHttpApi.rule.find")(function* (id: string) {
+      const found = (yield* getRuleList()).find((rule) => rule.id === id)
+      if (!found) return yield* Effect.fail(skillError("missing", "Rule file was not found."))
+      return found
+    })
+
+    const getRuleFile = Effect.fn("InstanceHttpApi.ruleFile")(function* (ctx: { query: { id: string } }) {
+      const rule = yield* findRule(ctx.query.id)
+      if (!rule.exists) return yield* Effect.fail(skillError("missing", "Rule file does not exist yet."))
+      if (rule.remote) return yield* Effect.fail(skillError("readonly", "Remote rule files are read-only."))
+      const content = yield* readRuleContent(rule)
+      if (content === undefined) return yield* Effect.fail(skillError("missing", "Rule file could not be read."))
+      return {
+        id: rule.id,
+        title: rule.title,
+        path: rule.path,
+        content,
+        editable: rule.editable,
+      }
+    })
+
+    const reloadRule = Effect.fn("InstanceHttpApi.rule.reload")(function* (id: string) {
+      const found = (yield* getRuleList()).find((rule) => rule.id === id)
+      if (!found) return yield* Effect.fail(skillError("missing", "Rule file was not found."))
+      return found
+    })
+
+    const createRule = Effect.fn("InstanceHttpApi.ruleCreate")(function* (ctx: {
+      payload: typeof RuleCreatePayload.Type
+    }) {
+      const instance = yield* InstanceState.context
+      const target = ctx.payload.source === "project"
+        ? path.join(instance.directory, "AGENTS.md")
+        : path.join(Global.Path.config, "AGENTS.md")
+      if (yield* fs.existsSafe(target)) {
+        return yield* Effect.fail(skillError("conflict", "AGENTS.md already exists at that location."))
+      }
+      yield* fs.writeWithDirs(target, ctx.payload.content).pipe(
+        Effect.mapError(() => skillError("invalid", "Rule file could not be created.")),
+      )
+      return yield* reloadRule(ctx.payload.source === "project" ? "project-agents" : "global-agents")
+    })
+
+    const updateRule = Effect.fn("InstanceHttpApi.ruleUpdate")(function* (ctx: {
+      payload: typeof RuleWritePayload.Type
+    }) {
+      const rule = yield* findRule(ctx.payload.id)
+      if (!rule.editable || rule.remote || !rule.exists) {
+        return yield* Effect.fail(skillError("readonly", "Rule file is read-only."))
+      }
+      yield* fs.writeWithDirs(rule.path, ctx.payload.content).pipe(
+        Effect.mapError(() => skillError("invalid", "Rule file could not be saved.")),
+      )
+      return yield* reloadRule(rule.id)
+    })
 
     const agentGenerate = Effect.fn("InstanceHttpApi.agentGenerate")(function* (ctx: {
       payload: typeof AgentGeneratePayload.Type
@@ -702,6 +931,10 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
       .handle("command", getCommand)
       .handle("agent", getAgent)
       .handle("agentGenerate", agentGenerate)
+      .handle("rule", getRuleList)
+      .handle("ruleFile", getRuleFile)
+      .handle("ruleCreate", createRule)
+      .handle("ruleUpdate", updateRule)
       .handle("skill", getSkill)
       .handle("skillFile", getSkillFile)
       .handle("skillCreate", createSkill)
