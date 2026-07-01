@@ -146,8 +146,13 @@ const OpenAIChatDelta = Schema.Struct({
   tool_calls: optionalNull(Schema.Array(OpenAIChatToolCallDelta)),
 })
 
+const OpenAIChatChoiceMessage = Schema.Struct({
+  tool_calls: optionalNull(Schema.Array(OpenAIChatAssistantToolCall)),
+})
+
 const OpenAIChatChoice = Schema.Struct({
   delta: optionalNull(OpenAIChatDelta),
+  message: optionalNull(OpenAIChatChoiceMessage),
   finish_reason: optionalNull(Schema.String),
 })
 
@@ -403,7 +408,14 @@ const step = (state: ParserState, event: OpenAIChatEvent) =>
     const choice = event.choices[0]
     const finishReason = choice?.finish_reason ? mapFinishReason(choice.finish_reason) : state.finishReason
     const delta = choice?.delta
-    const toolDeltas = delta?.tool_calls ?? []
+    const toolDeltas = [
+      ...(delta?.tool_calls ?? []),
+      ...(choice?.message?.tool_calls ?? []).map((tool, index) => ({
+        index,
+        id: tool.id,
+        function: tool.function,
+      })),
+    ]
     let tools = state.tools
 
     let lifecycle = state.lifecycle

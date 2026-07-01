@@ -588,6 +588,51 @@ describe("OpenAI Chat route", () => {
     }),
   )
 
+  it.effect("assembles complete streamed tool calls from final message payloads", () =>
+    Effect.gen(function* () {
+      const body = sseEvents({
+        id: "chatcmpl_fixture",
+        choices: [
+          {
+            message: {
+              tool_calls: [
+                {
+                  id: "call_1",
+                  type: "function",
+                  function: { name: "lookup", arguments: '{"query":"weather"}' },
+                },
+              ],
+            },
+            finish_reason: "stop",
+          },
+        ],
+        usage: null,
+      })
+      const response = yield* LLMClient.generate(
+        LLM.updateRequest(request, {
+          tools: [{ name: "lookup", description: "Lookup data", inputSchema: { type: "object" } }],
+        }),
+      ).pipe(Effect.provide(fixedResponse(body)))
+
+      expect(response.events).toEqual([
+        { type: "step-start", index: 0 },
+        { type: "tool-input-start", id: "call_1", name: "lookup", providerMetadata: undefined },
+        { type: "tool-input-delta", id: "call_1", name: "lookup", text: '{"query":"weather"}' },
+        { type: "tool-input-end", id: "call_1", name: "lookup", providerMetadata: undefined },
+        {
+          type: "tool-call",
+          id: "call_1",
+          name: "lookup",
+          input: { query: "weather" },
+          providerExecuted: undefined,
+          providerMetadata: undefined,
+        },
+        { type: "step-finish", index: 0, reason: "tool-calls", usage: undefined, providerMetadata: undefined },
+        { type: "finish", reason: "tool-calls", usage: undefined },
+      ])
+    }),
+  )
+
   it.effect("does not finalize streamed tool calls without a finish reason", () =>
     Effect.gen(function* () {
       const body = sseEvents(

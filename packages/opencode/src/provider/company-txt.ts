@@ -1,3 +1,5 @@
+import fs from "node:fs/promises"
+import path from "node:path"
 import type { Info, Model } from "./provider"
 import { countCompanyTxtTokens } from "./company-txt-tokenizer"
 
@@ -50,6 +52,10 @@ type CompanyStreamEvent = {
   data: Record<string, unknown>
 }
 
+type CompanyTxtRawLogger = {
+  log: (record: Record<string, unknown>) => Promise<void>
+}
+
 type ImageUpload = {
   filename: string
   content: Uint8Array
@@ -69,6 +75,7 @@ type StreamTranslationState = {
   sentContent: string
   pending: string
   bufferingTool: boolean
+  messageContent?: string
 }
 
 type StopState = {
@@ -114,6 +121,7 @@ export function createCompanyTxtFetch(
       const budget = await validatePrompt(prompt, request, model, metadata)
       const sessionID = await initSession(baseURL, use, metadata)
       await uploadFiles(baseURL, sessionID, metadata)
+      const rawLogger = createCompanyTxtRawLogger(request, model, metadata, sessionID)
       const upstream = await fetch(`${baseURL}/chatabc/chat`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -136,8 +144,9 @@ export function createCompanyTxtFetch(
       if (!upstream.ok || !upstream.body) {
         return errorResponse(`Company model API call failed: ${upstream.status}`, "upstream_error", 502)
       }
-      if (request.stream) return streamResponse(upstream.body, request, model, budget)
-      return jsonResponse(await collectCompletion(upstream.body, request, model, budget))
+      await rawLogger.log({ type: "request", baseURL, use_type: use, txt_field: txtField })
+      if (request.stream) return streamResponse(upstream.body, request, model, budget, rawLogger)
+      return jsonResponse(await collectCompletion(upstream.body, request, model, budget, rawLogger))
     } catch (error) {
       if (error instanceof CompanyTxtRequestError) {
         return errorResponse(error.message, error.code, error.status, error.param)
@@ -204,7 +213,7 @@ function selectBaseURL(model: Model) {
 }
 
 function useType(config: Record<string, unknown>) {
-  const value = stringOption(config.useType) ?? stringOption(config.use_type) ?? "agent"
+  const value = (stringOption(config.useType) ?? stringOption(config.use_type) ?? "agent").toLowerCase()
   if (value === "agent" || value === "workflow") return value
   throw new CompanyTxtRequestError("company-txt use_type must be one of: agent, workflow", {
     code: "invalid_provider_config",
@@ -287,9 +296,22 @@ function renderPrompt(request: ChatRequest, config: Record<string, unknown>) {
   ]
   const renderedTools = renderTools(tools, config)
   if (renderedTools) sections.push(renderedTools)
-  sections.push([...controlMessages(request, tools), ...(request.messages ?? [])].map(renderMessage).join("\n\n"))
+  sections.push(renderMessages([...controlMessages(request, tools), ...(request.messages ?? [])]))
   if (config.add_generation_prompt !== false) sections.push("assistant:")
   return sections.filter((section) => section.trim()).join("\n\n")
+}
+
+function renderMessages(messages: ChatMessage[]) {
+  const toolCallNamesByID = new Map<string, string>()
+  return messages
+    .map((message) => {
+      const rendered = renderMessage(message, toolCallNamesByID)
+      message.tool_calls?.forEach((toolCall) => {
+        if (toolCall.id && toolCall.function?.name) toolCallNamesByID.set(toolCall.id, toolCall.function.name)
+      })
+      return rendered
+    })
+    .join("\n\n")
 }
 
 function renderTools(tools: unknown[] | undefined, config: Record<string, unknown>) {
@@ -341,7 +363,7 @@ function renderToolDefinitions(request: ChatRequest) {
   return tools.length ? tools : request.tools
 }
 
-function renderMessage(message: ChatMessage) {
+function renderMessage(message: ChatMessage, toolCallNamesByID: Map<string, string>) {
   const role = message.role === "developer" ? "system" : (message.role ?? "user")
   const content = normalizedContent(message.content)
 
@@ -352,7 +374,8 @@ function renderMessage(message: ChatMessage) {
   }
 
   if (role === "tool") {
-    const label = `tool_response name=${message.name ?? message.tool_call_id ?? "unknown"}${
+    const toolName = message.name ?? (message.tool_call_id ? toolCallNamesByID.get(message.tool_call_id) : undefined)
+    const label = `tool_response name=${toolName ?? message.tool_call_id ?? "unknown"}${
       message.tool_call_id ? ` id=${message.tool_call_id}` : ""
     }`
     return `${label}:\n${content}`
@@ -396,12 +419,13 @@ async function streamResponse(
   request: ChatRequest,
   model: Model,
   budget: ContextBudget,
+  rawLogger?: CompanyTxtRawLogger,
 ) {
   const completionID = id("chatcmpl")
   const created = Math.floor(Date.now() / 1000)
   const decoder = new TextDecoder()
   const encoder = new TextEncoder()
-  const iterator = iterateCompanyEvents(body)
+  const iterator = iterateCompanyEvents(body, rawLogger)
   const parser = outputParser(model)
   const stop = stopFilter(request, model)
 
@@ -418,14 +442,23 @@ async function streamResponse(
         }
         const content = stringOption(event.data.content)
         if (!content) continue
+        if (event.event === "message") {
+          state.messageContent = content
+          continue
+        }
+        if (event.event !== "chunk") continue
         const delta = pushStreamText(state, content)
         const filtered = delta ? pushStop(stopState, delta) : undefined
         if (filtered) controller.enqueue(encoder.encode(contentChunk(completionID, created, request, filtered)))
         if (stopState.stopped) break
       }
 
-      const rawOutput = state.sentContent + state.pending
+      if (state.messageContent !== undefined && !state.sentContent && !state.pending) {
+        state.pending = state.messageContent
+      }
+      const rawOutput = state.messageContent ?? state.sentContent + state.pending
       const parsed = parser(rawOutput)
+      await rawLogger?.log({ type: "parsed", raw_output: rawOutput, parsed })
       const finalDelta = finishStreamText(state, parsed)
       const filteredFinal = finalDelta ? pushStop(stopState, finalDelta) : undefined
       const stopTail = finishStop(stopState)
@@ -472,15 +505,23 @@ async function collectCompletion(
   request: ChatRequest,
   model: Model,
   budget: ContextBudget,
+  rawLogger?: CompanyTxtRawLogger,
 ) {
   const chunks: string[] = []
-  for await (const event of iterateCompanyEvents(body)) {
+  let messageContent: string | undefined
+  for await (const event of iterateCompanyEvents(body, rawLogger)) {
     const content = stringOption(event.data.content)
-    if (content) chunks.push(content)
+    if (!content) continue
+    if (event.event === "message") {
+      messageContent = content
+      continue
+    }
+    if (event.event === "chunk") chunks.push(content)
   }
 
-  const content = chunks.join("")
+  const content = messageContent ?? chunks.join("")
   const parsed = applyStop(outputParser(model)(content), stopFilter(request, model))
+  await rawLogger?.log({ type: "parsed", raw_output: content, parsed })
   const message =
     parsed.type === "tool_calls"
       ? {
@@ -499,7 +540,10 @@ async function collectCompletion(
   }
 }
 
-async function* iterateCompanyEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<CompanyStreamEvent> {
+async function* iterateCompanyEvents(
+  body: ReadableStream<Uint8Array>,
+  rawLogger?: CompanyTxtRawLogger,
+): AsyncGenerator<CompanyStreamEvent> {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buffer = ""
@@ -509,10 +553,18 @@ async function* iterateCompanyEvents(body: ReadableStream<Uint8Array>): AsyncGen
     buffer += decoder.decode(part.value, { stream: true })
     const blocks = buffer.split(/\n\n/)
     buffer = blocks.pop() ?? ""
-    for (const block of blocks) yield parseCompanyEvent(block)
+    for (const block of blocks) {
+      const event = parseCompanyEvent(block)
+      await rawLogger?.log({ type: "event", raw: block, event: event.event, data: event.data })
+      yield event
+    }
   }
   buffer += decoder.decode()
-  if (buffer.trim()) yield parseCompanyEvent(buffer)
+  if (buffer.trim()) {
+    const event = parseCompanyEvent(buffer)
+    await rawLogger?.log({ type: "event", raw: buffer, event: event.event, data: event.data })
+    yield event
+  }
 }
 
 function parseCompanyEvent(block: string): CompanyStreamEvent {
@@ -691,6 +743,51 @@ function errorResponse(message: string, code: string, status: number, param?: st
       },
     }),
     { status, headers: { "content-type": "application/json" } },
+  )
+}
+
+function createCompanyTxtRawLogger(
+  request: ChatRequest,
+  model: Model,
+  metadata: RequestMetadata,
+  sessionID: string,
+): CompanyTxtRawLogger {
+  const directory = path.join(companyTxtLogRoot(metadata), ".opencode")
+  const file = path.join(directory, "company-txt-raw.log")
+  const ready = fs.mkdir(directory, { recursive: true }).catch(() => undefined)
+  return {
+    log: async (record) => {
+      try {
+        await ready
+        await fs.appendFile(
+          file,
+          `${JSON.stringify({
+            timestamp: new Date().toISOString(),
+            provider: "company-txt",
+            model: request.model ?? model.id,
+            configured_model: model.id,
+            company_session_id: sessionID,
+            ...record,
+          })}\n`,
+        )
+      } catch {}
+    },
+  }
+}
+
+function companyTxtLogRoot(metadata: RequestMetadata) {
+  return (
+    [
+      stringOption(metadata.worktree),
+      stringOption(metadata.root),
+      stringOption(metadata.project_root),
+      stringOption(metadata.projectRoot),
+      isRecord(metadata.path) ? stringOption(metadata.path.root) : undefined,
+      stringOption(metadata.directory),
+      stringOption(metadata.cwd),
+      isRecord(metadata.path) ? stringOption(metadata.path.cwd) : undefined,
+      process.cwd(),
+    ].find((item) => item && path.isAbsolute(item)) ?? process.cwd()
   )
 }
 
@@ -1004,7 +1101,11 @@ function parseObject(input: unknown): Record<string, unknown> {
 }
 
 function parseJsonRecord(input: string): Record<string, unknown> {
-  return parseObject(input || {})
+  if (!input) return {}
+  const parsed = parseJson(input, undefined)
+  if (isRecord(parsed)) return parsed
+  if (parsed !== undefined) return { value: parsed }
+  return { content: input }
 }
 
 function parseJson<T>(input: string, fallback: T): T {

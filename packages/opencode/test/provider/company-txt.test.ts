@@ -68,6 +68,107 @@ describe("company-txt provider", () => {
     }
   })
 
+  test("uses full message events as final output without duplicating streamed chunks", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-message" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          return new Response(
+            [
+              "event: chunk",
+              'data: {"content":"hello"}',
+              "",
+              "event: message",
+              'data: {"content":"hello"}',
+              "",
+              "event: done",
+              "data: {}",
+              "",
+            ].join("\n"),
+            { headers: { "content-type": "text/event-stream" } },
+          )
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      const response = await createCompanyTxtFetch(provider(server.url.origin))(
+        "http://company-txt.local/v1/chat/completions",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "qwen3-coder",
+            stream: true,
+            messages: [{ role: "user", content: "say hello" }],
+          }),
+        },
+      )
+      const events = sseEvents(await response.text())
+
+      expect(events.filter((event) => event.choices?.[0]?.delta?.content === "hello")).toHaveLength(1)
+      expect(events.some((event) => event.choices?.[0]?.delta?.content === "hellohello")).toBe(false)
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+  test("renders tool responses with the previous tool call name", async () => {
+    let prompt = ""
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-tool-result" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          const payload = (await request.json()) as { data?: { txt?: string } }
+          prompt = payload.data?.txt ?? ""
+          return new Response(["event: chunk", 'data: {"content":"done"}', ""].join("\n"), {
+            headers: { "content-type": "text/event-stream" },
+          })
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      await createCompanyTxtFetch(provider(server.url.origin))("http://company-txt.local/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "qwen3-coder",
+          messages: [
+            { role: "user", content: "find files" },
+            {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call_glob",
+                  type: "function",
+                  function: { name: "glob", arguments: '{"pattern":"**/*.ts"}' },
+                },
+              ],
+            },
+            { role: "tool", tool_call_id: "call_glob", content: "src/app.ts" },
+          ],
+        }),
+      })
+
+      expect(prompt).toContain("tool_response name=glob id=call_glob:")
+      expect(prompt).not.toContain("tool_response name=call_glob id=call_glob:")
+    } finally {
+      await server.stop(true)
+    }
+  })
+
   test("honors parallel_tool_calls false", async () => {
     const server = Bun.serve({
       port: 0,
