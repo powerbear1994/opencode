@@ -1,72 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "provider": {
-    "company-txt": {
-      "name": "Company TXT",
-      "npm": "@ai-sdk/openai-compatible",
-      "models": {
-        "qwen3-coder": {
-          "name": "Qwen3 Coder",
-          "tool_call": true,
-          "limit": {
-            "context": 262144,
-            "output": 0
-          },
-          "options": {
-            "adapter": "qwen",
-            "use_type": "agent",
-            "agent_urls": ["http://internal-qwen-agent"],
-            "tokenizer": "qwen3_6_35b_a3b",
-            "context_window": 262144,
-            "max_output_tokens": 0,
-            "stream_tool_call_mode": "complete",
-            "image_token_budget": {
-              "mode": "qwen_vl",
-              "min_pixels": 65536,
-              "max_pixels": 16777216,
-              "patch_size": 16,
-              "merge_size": 2
-            }
-          }
-        },
-        "kimi-k2": {
-          "name": "Kimi K2",
-          "tool_call": true,
-          "limit": {
-            "context": 262144,
-            "output": 0
-          },
-          "options": {
-            "adapter": "kimi",
-            "use_type": "agent",
-            "agent_urls": ["http://internal-kimi-agent"],
-            "tokenizer": "kimi_k2_5",
-            "context_window": 262144,
-            "max_output_tokens": 0,
-            "stream_tool_call_mode": "complete"
-          }
-        },
-        "minimax-text-01": {
-          "name": "MiniMax Text 01",
-          "tool_call": true,
-          "limit": {
-            "context": 196608,
-            "output": 0
-          },
-          "options": {
-            "adapter": "minimax",
-            "use_type": "agent",
-            "agent_urls": ["http://internal-minimax-agent"],
-            "tokenizer": "minimax_m2_5",
-            "context_window": 196608,
-            "max_output_tokens": 0,
-            "stream_tool_call_mode": "complete"
-          }
-        }
-      }
-    }
-  },
-  "enabled_providers": ["company-txt"],
+  "provider": {},
   "permission": {},
   "references": {
     "effect": {
@@ -81,7 +15,6 @@
   "mcp": {},
   "tools": {
     "github-triage": false,
-    "github-pr-search": false
+    "github-pr-search": false,
   },
-  "model": "company-txt/qwen3-coder"
 }
