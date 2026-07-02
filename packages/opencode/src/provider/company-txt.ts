@@ -1,5 +1,3 @@
-import fs from "node:fs/promises"
-import path from "node:path"
 import type { Info, Model } from "./provider"
 import { countCompanyTxtTokens } from "./company-txt-tokenizer"
 
@@ -52,14 +50,6 @@ type CompanyStreamEvent = {
   data: Record<string, unknown>
 }
 
-type CompanyTxtRawLogger = {
-  log: (record: Record<string, unknown>) => Promise<void>
-}
-
-type CompanyTxtFetchOptions = {
-  logRoot?: string
-}
-
 type ImageUpload = {
   filename: string
   content: Uint8Array
@@ -80,6 +70,11 @@ type StreamTranslationState = {
   pending: string
   bufferingTool: boolean
   messageContent?: string
+}
+
+type ToolMarkerSpan = {
+  contentLength: number
+  consumeLength: number
 }
 
 type ToolCallStyle = "qwen" | "kimi" | "minimax"
@@ -118,6 +113,7 @@ type StopState = {
 
 const TOOL_MARKERS = ["<tool_call>", "<|tool_calls_section_begin|>", "<minimax:tool_call>"]
 const MAX_TOOL_MARKER_LENGTH = Math.max(...TOOL_MARKERS.map((marker) => marker.length))
+const MAX_TOOL_MARKER_KEEP_LENGTH = MAX_TOOL_MARKER_LENGTH + "tool_call:\n".length
 
 class CompanyTxtRequestError extends Error {
   readonly status: number
@@ -135,7 +131,6 @@ class CompanyTxtRequestError extends Error {
 
 export function createCompanyTxtFetch(
   provider: Info,
-  options: CompanyTxtFetchOptions = {},
 ): (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> {
   return async (input, init) => {
     if (isModels(input)) return jsonResponse(modelList(provider))
@@ -153,7 +148,6 @@ export function createCompanyTxtFetch(
       const budget = await validatePrompt(prompt, request, model, metadata)
       const sessionID = await initSession(baseURL, use, metadata)
       await uploadFiles(baseURL, sessionID, metadata)
-      const rawLogger = createCompanyTxtRawLogger(request, model, metadata, sessionID, options)
       const upstream = await fetch(`${baseURL}/chatabc/chat`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -176,9 +170,8 @@ export function createCompanyTxtFetch(
       if (!upstream.ok || !upstream.body) {
         return errorResponse(`Company model API call failed: ${upstream.status}`, "upstream_error", 502)
       }
-      await rawLogger.log({ type: "request", baseURL, use_type: use, txt_field: txtField })
-      if (request.stream) return streamResponse(upstream.body, request, model, budget, rawLogger)
-      return jsonResponse(await collectCompletion(upstream.body, request, model, budget, rawLogger))
+      if (request.stream) return streamResponse(upstream.body, request, model, budget)
+      return jsonResponse(await collectCompletion(upstream.body, request, model, budget))
     } catch (error) {
       if (error instanceof CompanyTxtRequestError) {
         return errorResponse(error.message, error.code, error.status, error.param)
@@ -351,10 +344,27 @@ function renderTools(tools: unknown[] | undefined, config: Record<string, unknow
   return [
     "# Available Tools",
     "You may call tools only when needed. When calling a tool, output exactly one or more tool calls in the following native format and do not add extra prose around the tool call. Include every required property from the selected tool definition as its own parameter.",
+    fileContentToolInstruction(tools),
     toolCallFormat(config),
     "Tool definitions:",
     JSON.stringify(tools),
-  ].join("\n\n")
+  ]
+    .filter((item): item is string => Boolean(item))
+    .join("\n\n")
+}
+
+function fileContentToolInstruction(tools: unknown[]) {
+  if (!tools.some(isFileContentTool)) return
+  return [
+    "When using write or edit tools for source files, preserve human-readable multi-line formatting and indentation in content, oldString, and newString.",
+    "Do not minify HTML, CSS, JavaScript, TypeScript, JSX, TSX, Vue, JSON, Markdown, or source code unless the user explicitly asks for minified output.",
+  ].join(" ")
+}
+
+function isFileContentTool(tool: unknown) {
+  if (!isRecord(tool) || !isRecord(tool.function)) return false
+  const name = stringOption(tool.function.name)
+  return name === "write" || name === "edit"
 }
 
 function controlMessages(request: ChatRequest, tools: unknown[] | undefined): ChatMessage[] {
@@ -435,7 +445,7 @@ function renderMessage(message: ChatMessage, toolCallNamesByID: Map<string, stri
   if (role === "assistant" && message.tool_calls?.length) {
     const calls = message.tool_calls.map((call) => renderPreviousToolCall(call, config)).join("\n")
     const prefix = `assistant:\n${content}`.trimEnd()
-    return prefix ? `${prefix}\ntool_call:\n${calls}` : `tool_call:\n${calls}`
+    return prefix ? `${prefix}\n${calls}` : `assistant:\n${calls}`
   }
 
   if (role === "tool") {
@@ -552,13 +562,12 @@ async function streamResponse(
   request: ChatRequest,
   model: Model,
   budget: ContextBudget,
-  rawLogger?: CompanyTxtRawLogger,
 ) {
   const completionID = id("chatcmpl")
   const created = Math.floor(Date.now() / 1000)
   const decoder = new TextDecoder()
   const encoder = new TextEncoder()
-  const iterator = iterateCompanyEvents(body, rawLogger)
+  const iterator = iterateCompanyEvents(body)
   const parser = outputParser(model)
   const stop = stopFilter(request, model)
   const config = model.options ?? {}
@@ -575,7 +584,6 @@ async function streamResponse(
           iterator,
           parser,
           stop,
-          rawLogger,
           encoder,
         })
         decoder.decode()
@@ -608,7 +616,6 @@ async function streamResponse(
       }
       const rawOutput = state.messageContent ?? state.sentContent + state.pending
       const parsed = parser(rawOutput)
-      await rawLogger?.log({ type: "parsed", raw_output: rawOutput, parsed })
       const finalDelta = finishStreamText(state, parsed)
       const filteredFinal = finalDelta ? pushStop(stopState, finalDelta) : undefined
       const stopTail = finishStop(stopState)
@@ -661,7 +668,6 @@ async function streamLiveDelta(
     iterator: AsyncGenerator<CompanyStreamEvent>
     parser: (raw: string) => ParsedOutput
     stop: string[]
-    rawLogger?: CompanyTxtRawLogger
     encoder: TextEncoder
   },
 ) {
@@ -697,7 +703,6 @@ async function streamLiveDelta(
   }
   const rawOutput = state.messageContent ?? state.rawOutput
   const parsed = input.parser(rawOutput)
-  await input.rawLogger?.log({ type: "parsed", raw_output: rawOutput, parsed })
   const finalDelta = finishLiveStreamText(state)
   const filteredFinal = finalDelta ? pushStop(stopState, finalDelta) : undefined
   const stopTail = finishStop(stopState)
@@ -739,11 +744,10 @@ async function collectCompletion(
   request: ChatRequest,
   model: Model,
   budget: ContextBudget,
-  rawLogger?: CompanyTxtRawLogger,
 ) {
   const chunks: string[] = []
   let messageContent: string | undefined
-  for await (const event of iterateCompanyEvents(body, rawLogger)) {
+  for await (const event of iterateCompanyEvents(body)) {
     const content = stringOption(event.data.content)
     if (!content) continue
     if (event.event === "message") {
@@ -755,7 +759,6 @@ async function collectCompletion(
 
   const content = messageContent ?? chunks.join("")
   const parsed = applyStop(outputParser(model)(content), stopFilter(request, model))
-  await rawLogger?.log({ type: "parsed", raw_output: content, parsed })
   const message =
     parsed.type === "tool_calls"
       ? {
@@ -774,10 +777,7 @@ async function collectCompletion(
   }
 }
 
-async function* iterateCompanyEvents(
-  body: ReadableStream<Uint8Array>,
-  rawLogger?: CompanyTxtRawLogger,
-): AsyncGenerator<CompanyStreamEvent> {
+async function* iterateCompanyEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<CompanyStreamEvent> {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buffer = ""
@@ -789,14 +789,12 @@ async function* iterateCompanyEvents(
     buffer = blocks.pop() ?? ""
     for (const block of blocks) {
       const event = parseCompanyEvent(block)
-      await rawLogger?.log({ type: "event", raw: block, event: event.event, data: event.data })
       yield event
     }
   }
   buffer += decoder.decode()
   if (buffer.trim()) {
     const event = parseCompanyEvent(buffer)
-    await rawLogger?.log({ type: "event", raw: buffer, event: event.event, data: event.data })
     yield event
   }
 }
@@ -831,7 +829,7 @@ function parseQwenOutput(raw: string): ParsedOutput {
   if (!matches.length) return { type: "final", content: raw.trim() }
   return {
     type: "tool_calls",
-    content: raw.replace(/<tool_call>\s*.*?\s*<\/tool_call>/gs, "").trim() || undefined,
+    content: toolCallContent(raw.replace(/<tool_call>\s*.*?\s*<\/tool_call>/gs, "")),
     toolCalls: matches.map((match) => {
       const body = match.groups?.body?.trim() ?? ""
       if (body.startsWith("{")) return jsonToolCall(body)
@@ -858,7 +856,7 @@ function parseKimiOutput(raw: string): ParsedOutput {
   if (!matches.length) return { type: "final", content: raw.trim() }
   return {
     type: "tool_calls",
-    content: raw.replace(/<\|tool_calls_section_begin\|>.*?<\|tool_calls_section_end\|>/gs, "").trim() || undefined,
+    content: toolCallContent(raw.replace(/<\|tool_calls_section_begin\|>.*?<\|tool_calls_section_end\|>/gs, "")),
     toolCalls: matches.map((match) =>
       openAIToolCall(
         match.groups?.id ?? id("call"),
@@ -881,10 +879,11 @@ function parseMiniMaxOutput(raw: string): ParsedOutput {
   if (!bodies.length) return { type: "final", content: raw.trim() }
   return {
     type: "tool_calls",
-    content: raw
-      .replace(/<minimax:tool_call>\s*.*?\s*<\/minimax:tool_call>/gs, "")
-      .replace(/<minimax:tool_call>\s*.*$/s, "")
-      .trim() || undefined,
+    content: toolCallContent(
+      raw
+        .replace(/<minimax:tool_call>\s*.*?\s*<\/minimax:tool_call>/gs, "")
+        .replace(/<minimax:tool_call>\s*.*$/s, ""),
+    ),
     toolCalls: bodies.map((body) => {
       if (body.trim().startsWith("{")) return jsonToolCall(body.trim())
       const invoke = minimaxInvoke(body)
@@ -902,6 +901,10 @@ function parseMiniMaxOutput(raw: string): ParsedOutput {
       return openAIToolCall(id("call"), invoke.name.trim(), args)
     }),
   }
+}
+
+function toolCallContent(content: string) {
+  return content.replace(/(?:^|\n)[ \t]*tool_call:\s*$/i, "").trim() || undefined
 }
 
 function minimaxInvoke(body: string) {
@@ -1014,53 +1017,6 @@ function errorResponse(message: string, code: string, status: number, param?: st
   )
 }
 
-function createCompanyTxtRawLogger(
-  request: ChatRequest,
-  model: Model,
-  metadata: RequestMetadata,
-  sessionID: string,
-  options: CompanyTxtFetchOptions,
-): CompanyTxtRawLogger {
-  const directory = path.join(companyTxtLogRoot(metadata, options.logRoot), ".opencode")
-  const file = path.join(directory, "company-txt-raw.log")
-  const ready = fs.mkdir(directory, { recursive: true }).catch(() => undefined)
-  return {
-    log: async (record) => {
-      try {
-        await ready
-        await fs.appendFile(
-          file,
-          `${JSON.stringify({
-            timestamp: new Date().toISOString(),
-            provider: "company-txt",
-            model: request.model ?? model.id,
-            configured_model: model.id,
-            company_session_id: sessionID,
-            ...record,
-          })}\n`,
-        )
-      } catch {}
-    },
-  }
-}
-
-function companyTxtLogRoot(metadata: RequestMetadata, fallbackRoot?: string) {
-  return (
-    [
-      stringOption(metadata.worktree),
-      stringOption(metadata.root),
-      stringOption(metadata.project_root),
-      stringOption(metadata.projectRoot),
-      isRecord(metadata.path) ? stringOption(metadata.path.root) : undefined,
-      stringOption(fallbackRoot),
-      stringOption(metadata.directory),
-      stringOption(metadata.cwd),
-      isRecord(metadata.path) ? stringOption(metadata.path.cwd) : undefined,
-      process.cwd(),
-    ].find((item) => item && path.isAbsolute(item)) ?? process.cwd()
-  )
-}
-
 function createLiveStreamState(style: ToolCallStyle): LiveStreamTranslationState {
   return {
     sentContent: "",
@@ -1083,10 +1039,10 @@ function pushLiveStreamText(state: LiveStreamTranslationState, style: ToolCallSt
   const marker = toolMarker(style)
 
   if (!state.bufferingTool) {
-    const markerIndex = state.pending.indexOf(marker)
-    if (markerIndex < 0) return { content: flushLiveSafeContent(state, marker), toolCalls }
-    const content = flushLiveContent(state, markerIndex)
-    state.pending = state.pending.slice(marker.length)
+    const span = toolMarkerSpan(state.pending, marker)
+    if (!span) return { content: flushLiveSafeContent(state, marker), toolCalls }
+    const content = flushLiveContent(state, span.contentLength)
+    state.pending = state.pending.slice(span.consumeLength - span.contentLength)
     state.bufferingTool = true
     state.nativeState = initialNativeState(style)
     toolCalls.push(...consumeLiveToolBuffer(state, style))
@@ -1396,7 +1352,7 @@ function flushLiveContent(state: LiveStreamTranslationState, length: number) {
 }
 
 function liveSafeFlushLength(text: string, marker: string) {
-  return Math.max(0, text.length - Math.min(text.length, Math.max(marker.length, MAX_TOOL_MARKER_LENGTH) - 1))
+  return Math.max(0, text.length - Math.min(text.length, Math.max(marker.length, MAX_TOOL_MARKER_KEEP_LENGTH) - 1))
 }
 
 function consumeOptionalKimiSectionEnd(state: LiveStreamTranslationState) {
@@ -1439,13 +1395,13 @@ function pushStreamText(state: StreamTranslationState, text: string) {
   state.pending += text
   if (state.bufferingTool) return
 
-  const markerIndex = firstToolMarkerIndex(state.pending)
-  if (markerIndex !== undefined) {
+  const span = firstToolMarkerSpan(state.pending)
+  if (span) {
     state.bufferingTool = true
-    return flushStreamText(state, markerIndex)
+    return flushStreamText(state, span.contentLength)
   }
 
-  const safeLength = Math.max(0, state.pending.length - Math.min(state.pending.length, MAX_TOOL_MARKER_LENGTH - 1))
+  const safeLength = Math.max(0, state.pending.length - Math.min(state.pending.length, MAX_TOOL_MARKER_KEEP_LENGTH - 1))
   if (safeLength <= 0) return
   return flushStreamText(state, safeLength)
 }
@@ -1469,10 +1425,23 @@ function flushStreamText(state: StreamTranslationState, length: number) {
   return content
 }
 
-function firstToolMarkerIndex(text: string) {
-  const indexes = TOOL_MARKERS.map((marker) => text.indexOf(marker)).filter((index) => index >= 0)
-  if (!indexes.length) return
-  return Math.min(...indexes)
+function firstToolMarkerSpan(text: string) {
+  const spans = TOOL_MARKERS.map((marker) => toolMarkerSpan(text, marker)).filter(
+    (span): span is ToolMarkerSpan => Boolean(span),
+  )
+  if (!spans.length) return
+  return spans.reduce((first, span) => (span.consumeLength < first.consumeLength ? span : first))
+}
+
+function toolMarkerSpan(text: string, marker: string): ToolMarkerSpan | undefined {
+  const markerIndex = text.indexOf(marker)
+  if (markerIndex < 0) return
+  const beforeMarker = text.slice(0, markerIndex)
+  const label = /(?:^|\n)[ \t]*tool_call:\s*$/i.exec(beforeMarker)
+  return {
+    contentLength: label?.index ?? markerIndex,
+    consumeLength: markerIndex + marker.length,
+  }
 }
 
 function createStopState(stop: string[]): StopState {

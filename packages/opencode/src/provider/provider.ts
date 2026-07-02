@@ -217,12 +217,11 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         options: {},
       }),
     "company-txt": Effect.fnUntraced(function* (provider) {
-      const ctx = yield* InstanceState.context
       return {
         autoload: true,
         options: {
           baseURL: provider.options.baseURL || "http://company-txt.local/v1",
-          fetch: createCompanyTxtFetch(provider, { logRoot: ctx.worktree === "/" ? ctx.directory : ctx.worktree }),
+          fetch: createCompanyTxtFetch(provider),
         },
       }
     }),
