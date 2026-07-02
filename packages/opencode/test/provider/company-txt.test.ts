@@ -275,6 +275,157 @@ describe("company-txt provider", () => {
     }
   })
 
+  test("renders previous qwen tool calls as native parameters", async () => {
+    let prompt = ""
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-native-args" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          const payload = (await request.json()) as { data?: { txt?: string } }
+          prompt = payload.data?.txt ?? ""
+          return new Response(["event: chunk", 'data: {"content":"done"}', ""].join("\n"), {
+            headers: { "content-type": "text/event-stream" },
+          })
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      await createCompanyTxtFetch(provider(server.url.origin))("http://company-txt.local/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "qwen3-coder",
+          messages: [
+            { role: "user", content: "find files" },
+            {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call_glob",
+                  type: "function",
+                  function: {
+                    name: "glob",
+                    arguments: JSON.stringify({ pattern: "**/*.ts", path: "packages/opencode" }),
+                  },
+                },
+              ],
+            },
+            { role: "tool", tool_call_id: "call_glob", content: "packages/opencode/src/provider/company-txt.ts" },
+          ],
+        }),
+      })
+
+      expect(prompt).toContain("<function=glob>")
+      expect(prompt).toContain("<parameter=pattern>\n**/*.ts\n</parameter>")
+      expect(prompt).toContain("<parameter=path>\npackages/opencode\n</parameter>")
+      expect(prompt).not.toContain("<parameter=arguments>")
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+  test("prompts kimi models to emit strict JSON tool arguments", async () => {
+    let prompt = ""
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-kimi-rules" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          const payload = (await request.json()) as { data?: { txt?: string } }
+          prompt = payload.data?.txt ?? ""
+          return new Response(["event: chunk", 'data: {"content":"done"}', ""].join("\n"), {
+            headers: { "content-type": "text/event-stream" },
+          })
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      await createCompanyTxtFetch(provider(server.url.origin, { adapter: "kimi" }))(
+        "http://company-txt.local/v1/chat/completions",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "qwen3-coder",
+            messages: [{ role: "user", content: "write a Vue file" }],
+            tools: [{ type: "function", function: { name: "write", parameters: { type: "object" } } }],
+          }),
+        },
+      )
+
+      expect(prompt).toContain("must be one strict JSON object")
+      expect(prompt).toContain('escape inner double quotes as \\"')
+      expect(prompt).toContain('<script setup lang=\\"ts\\">')
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+  test("renders previous minimax tool call argument values without xml escaping", async () => {
+    let prompt = ""
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-minimax-raw" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          const payload = (await request.json()) as { data?: { txt?: string } }
+          prompt = payload.data?.txt ?? ""
+          return new Response(["event: chunk", 'data: {"content":"done"}', ""].join("\n"), {
+            headers: { "content-type": "text/event-stream" },
+          })
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      await createCompanyTxtFetch(provider(server.url.origin, { adapter: "minimax" }))(
+        "http://company-txt.local/v1/chat/completions",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "qwen3-coder",
+            messages: [
+              {
+                role: "assistant",
+                content: "",
+                tool_calls: [
+                  {
+                    id: "call_shell",
+                    type: "function",
+                    function: { name: "shell", arguments: JSON.stringify({ cmd: 'echo "a&b"' }) },
+                  },
+                ],
+              },
+            ],
+          }),
+        },
+      )
+
+      expect(prompt).not.toContain("&quot;")
+      expect(prompt).not.toContain("&amp;")
+      expect(prompt).toContain('<parameter name="cmd">echo "a&b"</parameter>')
+    } finally {
+      await server.stop(true)
+    }
+  })
+
   test("instructs models to repair invalid tool arguments", async () => {
     let prompt = ""
     const server = Bun.serve({
@@ -507,6 +658,165 @@ describe("company-txt provider", () => {
       expect(events.some((event) => event.choices?.[0]?.delta?.content === "hello ")).toBe(true)
       expect(events.some((event) => event.choices?.[0]?.delta?.tool_calls?.[0]?.function?.name === "write")).toBe(true)
       expect(events.some((event) => event.choices?.length === 0 && event.usage)).toBe(true)
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+  test("streams qwen tool calls as live OpenAI deltas", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-live-qwen" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          return new Response(
+            [
+              "event: chunk",
+              'data: {"content":"checking <tool_call>\\n<function=write>\\n<parameter=path>src/App"}',
+              "",
+              "event: chunk",
+              'data: {"content":".vue</parameter>\\n<parameter=content>{\\"ok\\":true}</parameter>\\n</function>\\n</tool_call>"}',
+              "",
+            ].join("\n"),
+            { headers: { "content-type": "text/event-stream" } },
+          )
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      const response = await createCompanyTxtFetch(
+        provider(server.url.origin, { stream_tool_call_mode: "live_delta" }),
+      )("http://company-txt.local/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "qwen3-coder",
+          stream: true,
+          messages: [{ role: "user", content: "write a file" }],
+          tools: [{ type: "function", function: { name: "write", parameters: { type: "object" } } }],
+        }),
+      })
+      const events = sseEvents(await response.text())
+      const deltas = events.flatMap((event) => event.choices?.[0]?.delta?.tool_calls ?? [])
+      const argumentText = deltas.map((delta) => delta.function?.arguments ?? "").join("")
+
+      expect(events.some((event) => event.choices?.[0]?.delta?.content === "checking ")).toBe(true)
+      expect(deltas[0]).toMatchObject({ index: 0, type: "function", function: { name: "write", arguments: "" } })
+      expect(JSON.parse(argumentText)).toEqual({ path: "src/App.vue", content: { ok: true } })
+      expect(events.findLast((event) => event.choices?.[0])?.choices?.[0]?.finish_reason).toBe("tool_calls")
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+  test("streams kimi tool calls as live OpenAI deltas", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-live-kimi" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          return new Response(
+            [
+              "event: chunk",
+              'data: {"content":"\\n<|tool_calls_section_begin|>\\n  <|tool_call_begin|> functions.search_code:0 <|tool_call_argument_begin|>{\\"keyword\\":\\"User"}',
+              "",
+              "event: chunk",
+              'data: {"content":"Service\\"}<|tool_call_end|>\\n<|tool_calls_section_end|>"}',
+              "",
+            ].join("\n"),
+            { headers: { "content-type": "text/event-stream" } },
+          )
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      const response = await createCompanyTxtFetch(
+        provider(server.url.origin, { adapter: "kimi", stream_tool_call_mode: "live_delta" }),
+      )("http://company-txt.local/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "qwen3-coder",
+          stream: true,
+          messages: [{ role: "user", content: "search" }],
+          tools: [{ type: "function", function: { name: "search_code", parameters: { type: "object" } } }],
+        }),
+      })
+      const events = sseEvents(await response.text())
+      const deltas = events.flatMap((event) => event.choices?.[0]?.delta?.tool_calls ?? [])
+
+      expect(deltas[0]).toMatchObject({
+        index: 0,
+        id: "functions.search_code:0",
+        type: "function",
+        function: { name: "search_code", arguments: "" },
+      })
+      expect(JSON.parse(deltas.map((delta) => delta.function?.arguments ?? "").join(""))).toEqual({
+        keyword: "UserService",
+      })
+      expect(events.findLast((event) => event.choices?.[0])?.choices?.[0]?.finish_reason).toBe("tool_calls")
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+  test("streams minimax tool calls as live OpenAI deltas", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-live-minimax" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          return new Response(
+            [
+              "event: chunk",
+              'data: {"content":"<minimax:tool_call><invoke name=\\"edit\\"><parameter name=\\"filePath\\">src/App"}',
+              "",
+              "event: chunk",
+              'data: {"content":".vue</parameter><parameter name=\\"newString\\">hello</parameter></invoke></minimax:tool_call>"}',
+              "",
+            ].join("\n"),
+            { headers: { "content-type": "text/event-stream" } },
+          )
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      const response = await createCompanyTxtFetch(
+        provider(server.url.origin, { adapter: "minimax", stream_tool_call_mode: "live_delta" }),
+      )("http://company-txt.local/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "qwen3-coder",
+          stream: true,
+          messages: [{ role: "user", content: "edit" }],
+          tools: [{ type: "function", function: { name: "edit", parameters: { type: "object" } } }],
+        }),
+      })
+      const events = sseEvents(await response.text())
+      const deltas = events.flatMap((event) => event.choices?.[0]?.delta?.tool_calls ?? [])
+
+      expect(deltas[0]).toMatchObject({ index: 0, type: "function", function: { name: "edit", arguments: "" } })
+      expect(JSON.parse(deltas.map((delta) => delta.function?.arguments ?? "").join(""))).toEqual({
+        filePath: "src/App.vue",
+        newString: "hello",
+      })
+      expect(events.findLast((event) => event.choices?.[0])?.choices?.[0]?.finish_reason).toBe("tool_calls")
     } finally {
       await server.stop(true)
     }

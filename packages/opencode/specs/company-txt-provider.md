@@ -111,8 +111,11 @@ For `use_type: "agent"`, uploaded images are also added to the chat payload:
 
 For `use_type: "workflow"`, image filenames are appended to `config_variables` as `{ "name": "img", "value": "<filename>" }`.
 
+## Streaming Tool Calls
+
+`stream_tool_call_mode: "live_delta"` enables OpenAI-compatible streaming `tool_calls` deltas while native company-model tags are still arriving. The default mode remains `complete`, which buffers the full native tool-call block and emits complete tool calls at the end of the stream.
+
 ## Limitations
 
-- `live_delta` tool argument streaming is not implemented. Tool calls are emitted after the native tool-call block is complete.
 - Token counting is implemented in TypeScript using bundled BPE/tiktoken vocabularies. It is much closer than character estimates, but it is not guaranteed to match Python `tokenizers` / `tiktoken` byte-for-byte for every Unicode edge case.
 - Only image attachments are migrated. Audio, video, and PDFs are not supported by this provider adapter.

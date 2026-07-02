@@ -82,6 +82,33 @@ type StreamTranslationState = {
   messageContent?: string
 }
 
+type ToolCallStyle = "qwen" | "kimi" | "minimax"
+
+type LiveToolCallDelta = {
+  index: number
+  id?: string
+  type?: "function"
+  function?: {
+    name?: string
+    arguments?: string
+  }
+}
+
+type LiveStreamTranslationState = {
+  sentContent: string
+  pending: string
+  rawOutput: string
+  bufferingTool: boolean
+  toolStarted: boolean
+  toolIndex: number
+  nativeState: string
+  emittedArgumentPrefix: boolean
+  activeParameterName?: string
+  activeParameterBuffer: string
+  activeParameterStreamingString: boolean
+  messageContent?: string
+}
+
 type StopState = {
   stop: string[]
   pending: string
@@ -301,16 +328,16 @@ function renderPrompt(request: ChatRequest, config: Record<string, unknown>) {
   ]
   const renderedTools = renderTools(tools, config)
   if (renderedTools) sections.push(renderedTools)
-  sections.push(renderMessages([...controlMessages(request, tools), ...(request.messages ?? [])]))
+  sections.push(renderMessages([...controlMessages(request, tools), ...(request.messages ?? [])], config))
   if (config.add_generation_prompt !== false) sections.push("assistant:")
   return sections.filter((section) => section.trim()).join("\n\n")
 }
 
-function renderMessages(messages: ChatMessage[]) {
+function renderMessages(messages: ChatMessage[], config: Record<string, unknown>) {
   const toolCallNamesByID = new Map<string, string>()
   return messages
     .map((message) => {
-      const rendered = renderMessage(message, toolCallNamesByID)
+      const rendered = renderMessage(message, toolCallNamesByID, config)
       message.tool_calls?.forEach((toolCall) => {
         if (toolCall.id && toolCall.function?.name) toolCallNamesByID.set(toolCall.id, toolCall.function.name)
       })
@@ -401,12 +428,12 @@ function renderToolDefinitions(request: ChatRequest) {
   return tools.length ? tools : request.tools
 }
 
-function renderMessage(message: ChatMessage, toolCallNamesByID: Map<string, string>) {
+function renderMessage(message: ChatMessage, toolCallNamesByID: Map<string, string>, config: Record<string, unknown>) {
   const role = message.role === "developer" ? "system" : (message.role ?? "user")
   const content = normalizedContent(message.content)
 
   if (role === "assistant" && message.tool_calls?.length) {
-    const calls = message.tool_calls.map(renderPreviousToolCall).join("\n")
+    const calls = message.tool_calls.map((call) => renderPreviousToolCall(call, config)).join("\n")
     const prefix = `assistant:\n${content}`.trimEnd()
     return prefix ? `${prefix}\ntool_call:\n${calls}` : `tool_call:\n${calls}`
   }
@@ -437,19 +464,87 @@ function normalizedContent(input: unknown): string {
     .join("\n")
 }
 
-function renderPreviousToolCall(call: ToolCall) {
-  return `<tool_call>\n<function=${call.function?.name ?? "unknown"}>\n<parameter=arguments>\n${call.function?.arguments ?? "{}"}\n</parameter>\n</function>\n</tool_call>`
+function renderPreviousToolCall(call: ToolCall, config: Record<string, unknown>) {
+  const style = toolCallStyle(config)
+  if (style === "kimi") return renderKimiPreviousToolCall(call)
+  if (style === "minimax") return renderMiniMaxPreviousToolCall(call)
+  return renderQwenPreviousToolCall(call)
+}
+
+function renderQwenPreviousToolCall(call: ToolCall) {
+  const parameters = Object.entries(toolCallArguments(call))
+    .map(([name, value]) => `<parameter=${name}>\n${stringifyToolArgument(value)}\n</parameter>`)
+    .join("\n")
+  return `<tool_call>\n<function=${call.function?.name ?? "unknown"}>\n${parameters}\n</function>\n</tool_call>`
+}
+
+function renderKimiPreviousToolCall(call: ToolCall) {
+  return `<|tool_calls_section_begin|><|tool_call_begin|>functions.${call.function?.name ?? "unknown"}:0<|tool_call_argument_begin|>${JSON.stringify(toolCallArguments(call))}<|tool_call_end|><|tool_calls_section_end|>`
+}
+
+function renderMiniMaxPreviousToolCall(call: ToolCall) {
+  const parameters = Object.entries(toolCallArguments(call))
+    .map(
+      ([name, value]) =>
+        `<parameter name="${escapeXml(name)}">${stringifyToolArgument(value)}</parameter>`,
+    )
+    .join("")
+  return `<minimax:tool_call><invoke name="${escapeXml(call.function?.name ?? "unknown")}">${parameters}</invoke></minimax:tool_call>`
+}
+
+function toolCallArguments(call: ToolCall) {
+  const raw = call.function?.arguments
+  if (!raw) return {}
+  const parsed = parseJson<unknown>(raw, undefined)
+  if (isRecord(parsed)) return parsed
+  return { _raw: raw }
+}
+
+function stringifyToolArgument(value: unknown) {
+  return typeof value === "string" ? value : (JSON.stringify(value) ?? String(value))
+}
+
+function escapeXml(text: string) {
+  return text
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
 }
 
 function toolCallFormat(config: Record<string, unknown>) {
-  const adapter = stringOption(config.adapter) ?? stringOption(config.parser) ?? "qwen"
-  if (adapter.includes("kimi")) {
-    return '<|tool_calls_section_begin|><|tool_call_begin|>functions.tool-name:0<|tool_call_argument_begin|>{"param-key":"param-value"}<|tool_call_end|><|tool_calls_section_end|>'
+  const style = toolCallStyle(config)
+  if (style === "kimi") {
+    return [
+      '<|tool_calls_section_begin|><|tool_call_begin|>functions.tool-name:0<|tool_call_argument_begin|>{"param-key":"param-value"}<|tool_call_end|><|tool_calls_section_end|>',
+      "",
+      "Rules for Kimi tool calls:",
+      "1. The text after <|tool_call_argument_begin|> must be one strict JSON object.",
+      '2. JSON string values must escape inner double quotes as \\".',
+      "3. When passing source code, HTML, shell commands, regular expressions, or JSON text as a parameter value, keep the value inside a JSON string and escape every required character.",
+      "",
+      "Example with source code content:",
+      '<|tool_calls_section_begin|><|tool_call_begin|>functions.write:0<|tool_call_argument_begin|>{"content":"<script setup lang=\\"ts\\">\\nconst name = \\"demo\\"\\n</script>","filePath":"src/App.vue"}<|tool_call_end|><|tool_calls_section_end|>',
+    ].join("\n")
   }
-  if (adapter.includes("minimax")) {
+  if (style === "minimax") {
     return '<minimax:tool_call>\n<invoke name="tool-name">\n<parameter name="param-key">param-value</parameter>\n</invoke>\n</minimax:tool_call>'
   }
   return "<tool_call>\n<function=tool-name>\n<parameter=param-key>\nparam-value\n</parameter>\n</function>\n</tool_call>"
+}
+
+function toolCallStyle(config: Record<string, unknown>): ToolCallStyle {
+  const adapter = (stringOption(config.adapter) ?? stringOption(config.parser) ?? "qwen").toLowerCase()
+  if (adapter.includes("kimi")) return "kimi"
+  if (adapter.includes("minimax")) return "minimax"
+  return "qwen"
+}
+
+function streamToolCallMode(config: Record<string, unknown>) {
+  return stringOption(config.streamToolCallMode)?.toLowerCase() === "live_delta" ||
+    stringOption(config.stream_tool_call_mode)?.toLowerCase() === "live_delta"
+    ? "live_delta"
+    : "complete"
 }
 
 async function streamResponse(
@@ -466,9 +561,26 @@ async function streamResponse(
   const iterator = iterateCompanyEvents(body, rawLogger)
   const parser = outputParser(model)
   const stop = stopFilter(request, model)
+  const config = model.options ?? {}
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
+      if (streamToolCallMode(config) === "live_delta") {
+        await streamLiveDelta(controller, {
+          completionID,
+          created,
+          request,
+          model,
+          budget,
+          iterator,
+          parser,
+          stop,
+          rawLogger,
+          encoder,
+        })
+        decoder.decode()
+        return
+      }
       const state: StreamTranslationState = { sentContent: "", pending: "", bufferingTool: false }
       const stopState = createStopState(stop)
       controller.enqueue(encoder.encode(roleChunk(completionID, created, request)))
@@ -536,6 +648,90 @@ async function streamResponse(
   return new Response(stream, {
     headers: { "content-type": "text/event-stream" },
   })
+}
+
+async function streamLiveDelta(
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  input: {
+    completionID: string
+    created: number
+    request: ChatRequest
+    model: Model
+    budget: ContextBudget
+    iterator: AsyncGenerator<CompanyStreamEvent>
+    parser: (raw: string) => ParsedOutput
+    stop: string[]
+    rawLogger?: CompanyTxtRawLogger
+    encoder: TextEncoder
+  },
+) {
+  const style = toolCallStyle(input.model.options ?? {})
+  const state = createLiveStreamState(style)
+  const stopState = createStopState(input.stop)
+  controller.enqueue(input.encoder.encode(roleChunk(input.completionID, input.created, input.request)))
+
+  for await (const event of input.iterator) {
+    if (event.event === "failed") {
+      controller.enqueue(input.encoder.encode(sse({ error: { message: "company-txt upstream failed" } })))
+      continue
+    }
+    const content = stringOption(event.data.content)
+    if (!content) continue
+    if (event.event === "message") {
+      state.messageContent = content
+      continue
+    }
+    if (event.event !== "chunk") continue
+    const step = pushLiveStreamText(state, style, content)
+    const filtered = step.content ? pushStop(stopState, step.content) : undefined
+    if (filtered) controller.enqueue(input.encoder.encode(contentChunk(input.completionID, input.created, input.request, filtered)))
+    if (stopState.stopped) break
+    step.toolCalls.forEach((delta) =>
+      controller.enqueue(input.encoder.encode(toolCallDeltaChunk(input.completionID, input.created, input.request, delta))),
+    )
+  }
+
+  if (state.messageContent !== undefined && !state.rawOutput) {
+    state.pending = state.messageContent
+    state.rawOutput = state.messageContent
+  }
+  const rawOutput = state.messageContent ?? state.rawOutput
+  const parsed = input.parser(rawOutput)
+  await input.rawLogger?.log({ type: "parsed", raw_output: rawOutput, parsed })
+  const finalDelta = finishLiveStreamText(state)
+  const filteredFinal = finalDelta ? pushStop(stopState, finalDelta) : undefined
+  const stopTail = finishStop(stopState)
+  if (filteredFinal) {
+    controller.enqueue(input.encoder.encode(contentChunk(input.completionID, input.created, input.request, filteredFinal)))
+  }
+  if (stopTail) controller.enqueue(input.encoder.encode(contentChunk(input.completionID, input.created, input.request, stopTail)))
+
+  controller.enqueue(
+    input.encoder.encode(
+      doneChunk(
+        input.completionID,
+        input.created,
+        input.request,
+        state.toolStarted && parsed.type === "tool_calls" && !stopState.stopped ? "tool_calls" : "stop",
+      ),
+    ),
+  )
+  if (input.request.stream_options?.include_usage) {
+    controller.enqueue(
+      input.encoder.encode(
+        sse({
+          id: input.completionID,
+          object: "chat.completion.chunk",
+          created: input.created,
+          model: input.request.model,
+          choices: [],
+          usage: await usage(input.budget, rawOutput, input.model),
+        }),
+      ),
+    )
+  }
+  controller.enqueue(input.encoder.encode("data: [DONE]\n\n"))
+  controller.close()
 }
 
 async function collectCompletion(
@@ -766,6 +962,16 @@ function toolCallChunk(id: string, created: number, request: ChatRequest, toolCa
   })
 }
 
+function toolCallDeltaChunk(id: string, created: number, request: ChatRequest, toolCall: LiveToolCallDelta) {
+  return sse({
+    id,
+    object: "chat.completion.chunk",
+    created,
+    model: request.model,
+    choices: [{ index: 0, delta: { tool_calls: [toolCall] }, finish_reason: null }],
+  })
+}
+
 function doneChunk(id: string, created: number, request: ChatRequest, finishReason: string) {
   return sse({
     id,
@@ -853,6 +1059,380 @@ function companyTxtLogRoot(metadata: RequestMetadata, fallbackRoot?: string) {
       process.cwd(),
     ].find((item) => item && path.isAbsolute(item)) ?? process.cwd()
   )
+}
+
+function createLiveStreamState(style: ToolCallStyle): LiveStreamTranslationState {
+  return {
+    sentContent: "",
+    pending: "",
+    rawOutput: "",
+    bufferingTool: false,
+    toolStarted: false,
+    toolIndex: 0,
+    nativeState: initialNativeState(style),
+    emittedArgumentPrefix: false,
+    activeParameterBuffer: "",
+    activeParameterStreamingString: false,
+  }
+}
+
+function pushLiveStreamText(state: LiveStreamTranslationState, style: ToolCallStyle, text: string) {
+  state.rawOutput += text
+  state.pending += text
+  const toolCalls: LiveToolCallDelta[] = []
+  const marker = toolMarker(style)
+
+  if (!state.bufferingTool) {
+    const markerIndex = state.pending.indexOf(marker)
+    if (markerIndex < 0) return { content: flushLiveSafeContent(state, marker), toolCalls }
+    const content = flushLiveContent(state, markerIndex)
+    state.pending = state.pending.slice(marker.length)
+    state.bufferingTool = true
+    state.nativeState = initialNativeState(style)
+    toolCalls.push(...consumeLiveToolBuffer(state, style))
+    return { content, toolCalls }
+  }
+
+  toolCalls.push(...consumeLiveToolBuffer(state, style))
+  return { content: undefined, toolCalls }
+}
+
+function finishLiveStreamText(state: LiveStreamTranslationState) {
+  if (state.toolStarted) return
+  if (!state.pending) return
+  return flushLiveContent(state, state.pending.length)
+}
+
+function consumeLiveToolBuffer(state: LiveStreamTranslationState, style: ToolCallStyle): LiveToolCallDelta[] {
+  if (style === "kimi") return consumeLiveKimi(state)
+  if (style === "minimax") return consumeLiveMiniMax(state)
+  return consumeLiveQwen(state)
+}
+
+function consumeLiveKimi(state: LiveStreamTranslationState): LiveToolCallDelta[] {
+  const deltas: LiveToolCallDelta[] = []
+  const argumentMarker = "<|tool_call_argument_begin|>"
+  const endMarker = "<|tool_call_end|>"
+
+  while (state.pending) {
+    if (state.nativeState === "done") {
+      if (beginNextLiveToolCall(state, "kimi")) continue
+      return deltas
+    }
+    if (state.nativeState === "kimi_header") {
+      state.pending = state.pending.trimStart()
+      if (state.pending.startsWith("<|tool_call_begin|>")) state.pending = state.pending.slice("<|tool_call_begin|>".length)
+      const markerIndex = state.pending.indexOf(argumentMarker)
+      if (markerIndex < 0) return deltas
+      const callID = state.pending.slice(0, markerIndex).trim()
+      state.pending = state.pending.slice(markerIndex + argumentMarker.length)
+      deltas.push(startLiveToolCall(state, kimiFunctionName(callID), callID))
+      state.nativeState = "kimi_arguments"
+      continue
+    }
+    if (state.nativeState === "kimi_arguments") {
+      const endIndex = state.pending.indexOf(endMarker)
+      if (endIndex >= 0) {
+        const argumentDelta = state.pending.slice(0, endIndex)
+        if (argumentDelta) deltas.push(argumentsLiveDelta(state, argumentDelta))
+        state.pending = state.pending.slice(endIndex + endMarker.length)
+        consumeOptionalKimiSectionEnd(state)
+        state.nativeState = "done"
+        continue
+      }
+      const safeLength = liveSafeFlushLength(state.pending, endMarker)
+      if (safeLength > 0) {
+        deltas.push(argumentsLiveDelta(state, state.pending.slice(0, safeLength)))
+        state.pending = state.pending.slice(safeLength)
+      }
+      return deltas
+    }
+    return deltas
+  }
+  return deltas
+}
+
+function consumeLiveQwen(state: LiveStreamTranslationState): LiveToolCallDelta[] {
+  const deltas: LiveToolCallDelta[] = []
+  while (state.pending) {
+    if (state.nativeState === "done") {
+      if (beginNextLiveToolCall(state, "qwen")) continue
+      return deltas
+    }
+    if (state.nativeState === "qwen_function") {
+      if (state.pending.trimStart().startsWith("{")) {
+        deltas.push(...consumeLiveQwenJsonToolCall(state))
+        continue
+      }
+      const match = /<function=(?<name>.*?)>/s.exec(state.pending)
+      if (!match?.groups?.name) return deltas
+      state.pending = state.pending.slice(match.index + match[0].length)
+      deltas.push(startLiveToolCall(state, match.groups.name.trim()))
+      state.nativeState = "qwen_body"
+      continue
+    }
+    if (state.nativeState === "qwen_body") {
+      const parameterMatch = /<parameter=(?<name>.*?)>/s.exec(state.pending)
+      const functionEnd = state.pending.indexOf("</function>")
+      if (parameterMatch?.groups?.name && (functionEnd < 0 || parameterMatch.index < functionEnd)) {
+        state.pending = state.pending.slice(parameterMatch.index + parameterMatch[0].length)
+        beginLiveParameter(state, parameterMatch.groups.name.trim())
+        state.nativeState = "qwen_parameter"
+        continue
+      }
+      if (functionEnd >= 0) {
+        deltas.push(...finishLiveArgumentObject(state))
+        state.pending = state.pending.slice(functionEnd + "</function>".length)
+        consumeOptionalLiveSuffix(state, "</tool_call>")
+        state.nativeState = "done"
+        continue
+      }
+      return deltas
+    }
+    if (state.nativeState === "qwen_parameter") {
+      deltas.push(...consumeLiveParameterValue(state, "qwen", "</parameter>"))
+      if ((state as LiveStreamTranslationState).nativeState === "qwen_body") continue
+      return deltas
+    }
+    return deltas
+  }
+  return deltas
+}
+
+function consumeLiveQwenJsonToolCall(state: LiveStreamTranslationState): LiveToolCallDelta[] {
+  const endMarker = "</tool_call>"
+  const endIndex = state.pending.indexOf(endMarker)
+  if (endIndex < 0) return []
+  const raw = state.pending.slice(0, endIndex).trim()
+  state.pending = state.pending.slice(endIndex + endMarker.length)
+  const data = parseObject(raw)
+  state.emittedArgumentPrefix = true
+  state.nativeState = "done"
+  return [
+    startLiveToolCall(state, stringOption(data.name) ?? "unknown", stringOption(data.id)),
+    argumentsLiveDelta(state, JSON.stringify(parseObject(data.arguments ?? {}))),
+  ]
+}
+
+function consumeLiveMiniMax(state: LiveStreamTranslationState): LiveToolCallDelta[] {
+  const deltas: LiveToolCallDelta[] = []
+  while (state.pending) {
+    if (state.nativeState === "done") {
+      if (beginNextLiveToolCall(state, "minimax")) continue
+      return deltas
+    }
+    if (state.nativeState === "minimax_invoke") {
+      const invoke = /<invoke\s+name=(?:"(?<double>[^"]+)"|'(?<single>[^']+)'|(?<bare>[^\s>]+))\s*>/s.exec(state.pending)
+      const name = invoke?.groups?.double ?? invoke?.groups?.single ?? invoke?.groups?.bare
+      if (!invoke || !name) return deltas
+      state.pending = state.pending.slice(invoke.index + invoke[0].length)
+      deltas.push(startLiveToolCall(state, name.trim()))
+      state.nativeState = "minimax_body"
+      continue
+    }
+    if (state.nativeState === "minimax_body") {
+      const parameterMatch =
+        /<parameter\s+name=(?:"(?<double>[^"]+)"|'(?<single>[^']+)'|(?<bare>[^\s>]+))\s*>/s.exec(state.pending)
+      const parameterName =
+        parameterMatch?.groups?.double ?? parameterMatch?.groups?.single ?? parameterMatch?.groups?.bare
+      const invokeEnd = state.pending.indexOf("</invoke>")
+      if (parameterMatch && parameterName && (invokeEnd < 0 || parameterMatch.index < invokeEnd)) {
+        state.pending = state.pending.slice(parameterMatch.index + parameterMatch[0].length)
+        beginLiveParameter(state, parameterName.trim())
+        state.nativeState = "minimax_parameter"
+        continue
+      }
+      if (invokeEnd >= 0) {
+        deltas.push(...finishLiveArgumentObject(state))
+        state.pending = state.pending.slice(invokeEnd + "</invoke>".length)
+        consumeOptionalLiveSuffix(state, "</minimax:tool_call>")
+        state.nativeState = "done"
+        continue
+      }
+      return deltas
+    }
+    if (state.nativeState === "minimax_parameter") {
+      deltas.push(...consumeLiveParameterValue(state, "minimax", "</parameter>"))
+      if ((state as LiveStreamTranslationState).nativeState === "minimax_body") continue
+      return deltas
+    }
+    return deltas
+  }
+  return deltas
+}
+
+function consumeLiveParameterValue(state: LiveStreamTranslationState, style: ToolCallStyle, endMarker: string) {
+  const deltas: LiveToolCallDelta[] = []
+  const endIndex = state.pending.indexOf(endMarker)
+  if (endIndex >= 0) {
+    const valueDelta = state.pending.slice(0, endIndex)
+    state.pending = state.pending.slice(endIndex + endMarker.length)
+    deltas.push(...parameterValueLiveDelta(state, valueDelta, true))
+    endLiveParameter(state)
+    state.nativeState = style === "minimax" ? "minimax_body" : "qwen_body"
+    return deltas
+  }
+  const safeLength = liveSafeFlushLength(state.pending, endMarker)
+  if (safeLength > 0) {
+    const valueDelta = state.pending.slice(0, safeLength)
+    state.pending = state.pending.slice(safeLength)
+    deltas.push(...parameterValueLiveDelta(state, valueDelta, false))
+  }
+  return deltas
+}
+
+function parameterValueLiveDelta(state: LiveStreamTranslationState, valueDelta: string, isFinal: boolean) {
+  const deltas: LiveToolCallDelta[] = []
+  if (valueDelta) state.activeParameterBuffer += valueDelta
+  if (state.activeParameterStreamingString) {
+    if (valueDelta) deltas.push(argumentsLiveDelta(state, jsonStringFragment(valueDelta)))
+    if (isFinal) deltas.push(argumentsLiveDelta(state, '"'))
+    return deltas
+  }
+  const stripped = state.activeParameterBuffer.trimStart()
+  if (!stripped && !isFinal) return deltas
+  if (!isFinal && shouldStreamAsString(stripped)) {
+    state.activeParameterStreamingString = true
+    return [argumentsLiveDelta(state, liveParameterJsonPrefix(state) + '"' + jsonStringFragment(state.activeParameterBuffer))]
+  }
+  if (!isFinal) return deltas
+  return [
+    argumentsLiveDelta(
+      state,
+      liveParameterJsonPrefix(state) + JSON.stringify(parseParameter(state.activeParameterBuffer.trim())),
+    ),
+  ]
+}
+
+function beginLiveParameter(state: LiveStreamTranslationState, name: string) {
+  state.activeParameterName = name
+  state.activeParameterBuffer = ""
+  state.activeParameterStreamingString = false
+}
+
+function endLiveParameter(state: LiveStreamTranslationState) {
+  state.activeParameterName = undefined
+  state.activeParameterBuffer = ""
+  state.activeParameterStreamingString = false
+}
+
+function liveParameterJsonPrefix(state: LiveStreamTranslationState) {
+  const prefix = state.emittedArgumentPrefix ? "," : "{"
+  state.emittedArgumentPrefix = true
+  return prefix + JSON.stringify(state.activeParameterName ?? "") + ":"
+}
+
+function finishLiveArgumentObject(state: LiveStreamTranslationState) {
+  if (!state.emittedArgumentPrefix) {
+    state.emittedArgumentPrefix = true
+    return [argumentsLiveDelta(state, "{}")]
+  }
+  return [argumentsLiveDelta(state, "}")]
+}
+
+function startLiveToolCall(state: LiveStreamTranslationState, name: string, callID?: string): LiveToolCallDelta {
+  state.toolStarted = true
+  return {
+    index: state.toolIndex,
+    id: callID ?? id("call"),
+    type: "function",
+    function: { name, arguments: "" },
+  }
+}
+
+function beginNextLiveToolCall(state: LiveStreamTranslationState, style: ToolCallStyle) {
+  const marker = toolMarker(style)
+  let pending = state.pending.trimStart()
+  if (style === "kimi") {
+    if (pending.startsWith("<|tool_calls_section_end|>")) {
+      pending = pending.slice("<|tool_calls_section_end|>".length).trimStart()
+      if (!pending.startsWith(marker)) {
+        state.pending = pending
+        return false
+      }
+    }
+    if (pending.startsWith(marker)) pending = pending.slice(marker.length).trimStart()
+    if (!pending.startsWith("<|tool_call_begin|>")) {
+      state.pending = pending
+      return false
+    }
+    state.pending = pending
+  } else {
+    if (!pending.startsWith(marker)) {
+      state.pending = pending
+      return false
+    }
+    state.pending = pending.slice(marker.length)
+  }
+  resetLiveToolCallState(state)
+  state.nativeState = initialNativeState(style)
+  return true
+}
+
+function resetLiveToolCallState(state: LiveStreamTranslationState) {
+  state.toolIndex++
+  state.emittedArgumentPrefix = false
+  state.activeParameterName = undefined
+  state.activeParameterBuffer = ""
+  state.activeParameterStreamingString = false
+}
+
+function argumentsLiveDelta(state: LiveStreamTranslationState, argumentsDelta: string): LiveToolCallDelta {
+  return { index: state.toolIndex, function: { arguments: argumentsDelta } }
+}
+
+function flushLiveSafeContent(state: LiveStreamTranslationState, marker: string) {
+  const safeLength = liveSafeFlushLength(state.pending, marker)
+  if (safeLength <= 0) return
+  return flushLiveContent(state, safeLength)
+}
+
+function flushLiveContent(state: LiveStreamTranslationState, length: number) {
+  const content = state.pending.slice(0, length)
+  state.pending = state.pending.slice(length)
+  if (!content) return
+  state.sentContent += content
+  return content
+}
+
+function liveSafeFlushLength(text: string, marker: string) {
+  return Math.max(0, text.length - Math.min(text.length, Math.max(marker.length, MAX_TOOL_MARKER_LENGTH) - 1))
+}
+
+function consumeOptionalKimiSectionEnd(state: LiveStreamTranslationState) {
+  if (state.pending.startsWith("<|tool_calls_section_end|>")) {
+    state.pending = state.pending.slice("<|tool_calls_section_end|>".length)
+  }
+}
+
+function consumeOptionalLiveSuffix(state: LiveStreamTranslationState, marker: string) {
+  const pending = state.pending.trimStart()
+  if (pending.startsWith(marker)) state.pending = pending.slice(marker.length)
+}
+
+function initialNativeState(style: ToolCallStyle) {
+  if (style === "kimi") return "kimi_header"
+  if (style === "minimax") return "minimax_invoke"
+  return "qwen_function"
+}
+
+function toolMarker(style: ToolCallStyle) {
+  if (style === "kimi") return "<|tool_calls_section_begin|>"
+  if (style === "minimax") return "<minimax:tool_call>"
+  return "<tool_call>"
+}
+
+function shouldStreamAsString(value: string) {
+  return (
+    !["{", "[", '"', "-", "+"].some((prefix) => value.startsWith(prefix)) &&
+    !["true", "false", "null"].some((prefix) => value.startsWith(prefix)) &&
+    !/^\d/.test(value)
+  )
+}
+
+function jsonStringFragment(value: string) {
+  const encoded = JSON.stringify(value)
+  return encoded.slice(1, -1)
 }
 
 function pushStreamText(state: StreamTranslationState, text: string) {
