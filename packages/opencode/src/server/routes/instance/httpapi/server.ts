@@ -69,7 +69,7 @@ import * as SessionExecutionLocal from "@opencode-ai/core/session/execution/loca
 import { lazy } from "@/util/lazy"
 import { CorsConfig, isAllowedCorsOrigin, type CorsOptions } from "@opencode-ai/server/cors"
 import { serveUIEffect } from "@/server/shared/ui"
-import { ServerAuth } from "@/server/auth"
+import { ServerAuth } from "@opencode-ai/server/auth"
 import { InstanceHttpApi, RootHttpApi } from "./api"
 import { Api } from "@opencode-ai/server/api"
 import { PublicApi } from "./public"
@@ -141,7 +141,7 @@ const serverHttpApiAuthLayer = serverAuthorizationLayer.pipe(Layer.provide(Serve
 const workspaceRoutingLive = workspaceRoutingLayer.pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal))
 const rootApiRoutes = HttpApiBuilder.layer(RootHttpApi).pipe(
   Layer.provide([authHandlers, controlHandlers, controlPlaneHandlers, globalHandlers]),
-  Layer.provide(ServerAuth.Config.defaultLayer),
+  Layer.provide(ServerAuth.Config.layer),
   Layer.provide(schemaErrorLayer),
   Layer.provide(httpApiAuthLayer),
 )

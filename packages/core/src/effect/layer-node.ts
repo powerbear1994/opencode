@@ -258,8 +258,19 @@ export function compile<A, E, const Items extends Replacements = readonly []>(
       node,
       (node, context) => {
         if (node.kind === "unbound") throw new Error(`Unbound layer node: ${node.name}`)
-        const dependencies = node.dependencies.flatMap(flatten).map(context.visit)
+        const dependencies = node.dependencies.flatMap(flatten).map((dependency) => {
+          const layer = context.visit(dependency)
+          if (!layer) throw new Error(`Layer node ${node.name} dependency ${dependency.name} compiled to undefined`)
+          return layer
+        })
+        if (node.kind === "group") {
+          return dependencies.reduce<RuntimeLayer>(
+            (result, layer) => layer.pipe(Layer.provideMerge(result)),
+            Layer.empty,
+          )
+        }
         const implementation = node.implementation! as RuntimeLayer
+        if (!implementation) throw new Error(`Layer node ${node.name} implementation is undefined`)
         return dependencies.length === 0
           ? implementation
           : implementation.pipe(Layer.provide(dependencies as [RuntimeLayer, ...RuntimeLayer[]]))

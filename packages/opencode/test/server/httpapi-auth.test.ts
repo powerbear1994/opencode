@@ -33,7 +33,7 @@ const apiLayer = HttpRouter.serve(
   Layer.provide(Layer.mock(Config.Service)({})),
   Layer.provide(Layer.mock(Installation.Service)({})),
   Layer.provide(Layer.mock(MoveSession.Service)({})),
-  Layer.provide(ServerAuth.Config.layer({ password: Option.some("secret"), username: "opencode" })),
+  Layer.provide(ServerAuth.Config.configLayer({ password: Option.some("secret"), username: "opencode" })),
 )
 const it = testEffect(apiLayer)
 

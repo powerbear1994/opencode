@@ -37,6 +37,16 @@ describe("layer node", () => {
     expect(await Effect.runPromise(program)).toBe("hello production")
   })
 
+  test("treats empty dependency groups as empty layers", async () => {
+    const isolated = make({
+      service: Greeting,
+      layer: Layer.succeed(Greeting, Greeting.of({ value: "hello isolated" })),
+      deps: [LayerNode.group([])],
+    })
+    const program = Effect.map(Greeting, (item) => item.value).pipe(Effect.provide(build(LayerNode.group([isolated]))))
+    expect(await Effect.runPromise(program)).toBe("hello isolated")
+  })
+
   test("exposes roots but hides transitive dependencies", () => {
     const layer = build(LayerNode.group([greeting]))
     const check: Layer.Layer<Greeting> = layer

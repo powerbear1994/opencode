@@ -417,7 +417,7 @@
     },
     "packages/effect-drizzle-sqlite": {
       "name": "@opencode-ai/effect-drizzle-sqlite",
-      "version": "1.17.10",
+      "version": "1.17.13",
       "dependencies": {
         "drizzle-orm": "catalog:",
         "effect": "catalog:",

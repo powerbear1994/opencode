@@ -1,5 +1,3 @@
-export * as PtyEnvironment from "./pty-environment"
-
 import { Context, Effect, Layer } from "effect"
 import { makeGlobalNode } from "@opencode-ai/core/effect/app-node"
 
@@ -17,3 +15,9 @@ export const layer = Layer.succeed(
 )
 
 export const node = makeGlobalNode({ service: Service, layer, deps: [] })
+
+export const PtyEnvironment = {
+  Service,
+  layer,
+  node,
+}

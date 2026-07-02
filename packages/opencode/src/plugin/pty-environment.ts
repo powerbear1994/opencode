@@ -1,5 +1,3 @@
-export * as PluginPtyEnvironment from "./pty-environment"
-
 import { PtyEnvironment } from "@opencode-ai/server/pty-environment"
 import { Effect, Layer } from "effect"
 import { InstanceStore } from "@/project/instance-store"
@@ -22,3 +20,7 @@ export const layer = Layer.effect(
     })
   }),
 )
+
+export const PluginPtyEnvironment = {
+  layer,
+}
