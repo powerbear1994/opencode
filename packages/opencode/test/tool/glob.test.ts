@@ -133,4 +133,47 @@ describe("tool.glob", () => {
       }
     }),
   )
+
+  it.instance("rejects missing directory paths before running ripgrep", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const info = yield* GlobTool
+      const glob = yield* info.init()
+      const exit = yield* glob
+        .execute(
+          {
+            pattern: "*.ts",
+            path: path.join(test.directory, "missing"),
+          },
+          ctx,
+        )
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) {
+        const err = Cause.squash(exit.cause)
+        expect(err instanceof Error ? err.message : String(err)).toContain(
+          "glob path does not exist or is not accessible",
+        )
+      }
+    }),
+  )
+
+  it.instance("maps model-supplied Windows project roots back to the current directory", () =>
+    Effect.gen(function* () {
+      if (process.platform === "win32") return
+      const test = yield* TestInstance
+      yield* Effect.promise(() => Bun.write(path.join(test.directory, "package.json"), "{}\n"))
+      const info = yield* GlobTool
+      const glob = yield* info.init()
+      const result = yield* glob.execute(
+        {
+          pattern: "**/package.json",
+          path: `C:\\Users\\${path.basename(test.directory)}`,
+        },
+        ctx,
+      )
+      expect(result.metadata.count).toBe(1)
+      expect(result.output).toContain(path.join(test.directory, "package.json"))
+    }),
+  )
 })

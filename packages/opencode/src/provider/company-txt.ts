@@ -56,6 +56,10 @@ type CompanyTxtRawLogger = {
   log: (record: Record<string, unknown>) => Promise<void>
 }
 
+type CompanyTxtFetchOptions = {
+  logRoot?: string
+}
+
 type ImageUpload = {
   filename: string
   content: Uint8Array
@@ -104,6 +108,7 @@ class CompanyTxtRequestError extends Error {
 
 export function createCompanyTxtFetch(
   provider: Info,
+  options: CompanyTxtFetchOptions = {},
 ): (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> {
   return async (input, init) => {
     if (isModels(input)) return jsonResponse(modelList(provider))
@@ -121,7 +126,7 @@ export function createCompanyTxtFetch(
       const budget = await validatePrompt(prompt, request, model, metadata)
       const sessionID = await initSession(baseURL, use, metadata)
       await uploadFiles(baseURL, sessionID, metadata)
-      const rawLogger = createCompanyTxtRawLogger(request, model, metadata, sessionID)
+      const rawLogger = createCompanyTxtRawLogger(request, model, metadata, sessionID, options)
       const upstream = await fetch(`${baseURL}/chatabc/chat`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -318,7 +323,7 @@ function renderTools(tools: unknown[] | undefined, config: Record<string, unknow
   if (!tools) return
   return [
     "# Available Tools",
-    "You may call tools only when needed. When calling a tool, output exactly one or more tool calls in the following native format and do not add extra prose around the tool call.",
+    "You may call tools only when needed. When calling a tool, output exactly one or more tool calls in the following native format and do not add extra prose around the tool call. Include every required property from the selected tool definition as its own parameter.",
     toolCallFormat(config),
     "Tool definitions:",
     JSON.stringify(tools),
@@ -329,6 +334,7 @@ function controlMessages(request: ChatRequest, tools: unknown[] | undefined): Ch
   const instructions = [
     toolChoiceInstruction(request, tools),
     responseFormatInstruction(request.response_format),
+    toolFailureRetryInstruction(request.messages),
   ].filter((item): item is string => Boolean(item))
   if (!instructions.length) return []
   return [{ role: "system", content: instructions.join("\n") }]
@@ -349,6 +355,38 @@ function responseFormatInstruction(format: Record<string, unknown> | undefined) 
     return `Respond with JSON that conforms to the supplied json_schema. json_schema=${JSON.stringify(format.json_schema)}`
   }
 }
+
+function toolFailureRetryInstruction(messages: ChatMessage[] | undefined) {
+  if (messages?.some(isInvalidToolArgumentMessage)) {
+    return "A previous tool response reported invalid arguments. Treat it as a schema repair request: identify the original tool named in the error, call that original tool again with corrected arguments that satisfy its schema, and do not answer directly."
+  }
+  if (!messages?.some(isFailedToolMessage)) return
+  return "A previous tool response reported a recoverable failure. Do not stop after the failed tool call; inspect the error, then retry the same tool with corrected arguments or use another appropriate tool before answering."
+}
+
+function isInvalidToolArgumentMessage(message: ChatMessage) {
+  if (message.role !== "tool") return false
+  const content = normalizedContent(message.content)
+  return content.includes("invalid arguments") && content.includes("satisfies the expected schema")
+}
+
+function isFailedToolMessage(message: ChatMessage) {
+  if (message.role !== "tool") return false
+  const content = normalizedContent(message.content).toLowerCase()
+  return TOOL_FAILURE_MARKERS.some((marker) => content.includes(marker))
+}
+
+const TOOL_FAILURE_MARKERS = [
+  "schemaerror",
+  "execution failed",
+  "tool execution was interrupted",
+  "does not exist",
+  "not found",
+  "permission denied",
+  "access denied",
+  "cannot ",
+  "can't ",
+]
 
 function renderToolDefinitions(request: ChatRequest) {
   if (request.tool_choice === "none") return
@@ -637,24 +675,48 @@ function parseKimiOutput(raw: string): ParsedOutput {
 
 function parseMiniMaxOutput(raw: string): ParsedOutput {
   const matches = [...raw.matchAll(/<minimax:tool_call>\s*(?<body>.*?)\s*<\/minimax:tool_call>/gs)]
-  if (!matches.length) return { type: "final", content: raw.trim() }
+  const consumedSpans = matches.map((match) => [match.index ?? 0, (match.index ?? 0) + match[0].length] as const)
+  const partialMatches = [...raw.matchAll(/<minimax:tool_call>\s*(?<body>.*)$/gs)].filter(
+    (match) =>
+      !consumedSpans.some(([start, end]) => start <= (match.index ?? 0) && (match.index ?? 0) < end) &&
+      minimaxInvoke(match.groups?.body ?? ""),
+  )
+  const bodies = [...matches, ...partialMatches].map((match) => match.groups?.body ?? "")
+  if (!bodies.length) return { type: "final", content: raw.trim() }
   return {
     type: "tool_calls",
-    content: raw.replace(/<minimax:tool_call>\s*.*?\s*<\/minimax:tool_call>/gs, "").trim() || undefined,
-    toolCalls: matches.map((match) => {
-      const invoke = /<invoke\s+name=["'](?<name>[^"']+)["']\s*>\s*(?<body>.*?)\s*<\/invoke>/s.exec(
-        match.groups?.body ?? "",
-      )
-      if (!invoke?.groups?.name) throw new Error("company-txt minimax tool call parse failed")
+    content: raw
+      .replace(/<minimax:tool_call>\s*.*?\s*<\/minimax:tool_call>/gs, "")
+      .replace(/<minimax:tool_call>\s*.*$/s, "")
+      .trim() || undefined,
+    toolCalls: bodies.map((body) => {
+      if (body.trim().startsWith("{")) return jsonToolCall(body.trim())
+      const invoke = minimaxInvoke(body)
+      if (!invoke?.name) throw new Error("company-txt minimax tool call parse failed")
       const args = Object.fromEntries(
         [
-          ...(invoke.groups.body ?? "").matchAll(
-            /<parameter\s+name=["'](?<name>[^"']+)["']\s*>\s*(?<value>.*?)\s*<\/parameter>/gs,
+          ...invoke.body.matchAll(
+            /<parameter\s+name=(?:"(?<double>[^"]+)"|'(?<single>[^']+)'|(?<bare>[^\s>]+))\s*>\s*(?<value>.*?)\s*<\/parameter>/gs,
           ),
-        ].map((param) => [param.groups?.name?.trim() ?? "", parseParameter(param.groups?.value?.trim() ?? "")]),
+        ].map((param) => [
+          (param.groups?.double ?? param.groups?.single ?? param.groups?.bare ?? "").trim(),
+          parseParameter(param.groups?.value?.trim() ?? ""),
+        ]),
       )
-      return openAIToolCall(id("call"), invoke.groups.name.trim(), args)
+      return openAIToolCall(id("call"), invoke.name.trim(), args)
     }),
+  }
+}
+
+function minimaxInvoke(body: string) {
+  const invoke =
+    /<invoke\s+name=(?:"(?<double>[^"]+)"|'(?<single>[^']+)'|(?<bare>[^\s>]+))\s*>\s*(?<body>.*?)\s*<\/invoke>/s.exec(
+      body,
+    )
+  if (!invoke?.groups) return
+  return {
+    name: invoke.groups.double ?? invoke.groups.single ?? invoke.groups.bare ?? "",
+    body: invoke.groups.body ?? "",
   }
 }
 
@@ -751,8 +813,9 @@ function createCompanyTxtRawLogger(
   model: Model,
   metadata: RequestMetadata,
   sessionID: string,
+  options: CompanyTxtFetchOptions,
 ): CompanyTxtRawLogger {
-  const directory = path.join(companyTxtLogRoot(metadata), ".opencode")
+  const directory = path.join(companyTxtLogRoot(metadata, options.logRoot), ".opencode")
   const file = path.join(directory, "company-txt-raw.log")
   const ready = fs.mkdir(directory, { recursive: true }).catch(() => undefined)
   return {
@@ -775,7 +838,7 @@ function createCompanyTxtRawLogger(
   }
 }
 
-function companyTxtLogRoot(metadata: RequestMetadata) {
+function companyTxtLogRoot(metadata: RequestMetadata, fallbackRoot?: string) {
   return (
     [
       stringOption(metadata.worktree),
@@ -783,6 +846,7 @@ function companyTxtLogRoot(metadata: RequestMetadata) {
       stringOption(metadata.project_root),
       stringOption(metadata.projectRoot),
       isRecord(metadata.path) ? stringOption(metadata.path.root) : undefined,
+      stringOption(fallbackRoot),
       stringOption(metadata.directory),
       stringOption(metadata.cwd),
       isRecord(metadata.path) ? stringOption(metadata.path.cwd) : undefined,

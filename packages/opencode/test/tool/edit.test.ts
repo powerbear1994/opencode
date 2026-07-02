@@ -159,6 +159,24 @@ describe("tool.edit", () => {
       }),
     )
 
+    it.instance("maps model-supplied Windows file paths back to the current directory", () =>
+      Effect.gen(function* () {
+        if (process.platform === "win32") return
+        const test = yield* TestInstance
+        const filepath = path.join(test.directory, "existing.txt")
+        yield* put(filepath, "old content here")
+
+        const result = yield* run({
+          filePath: `C:\\Users\\${path.basename(test.directory)}\\existing.txt`,
+          oldString: "old content",
+          newString: "new content",
+        })
+
+        expect(result.output).toContain("Edit applied successfully")
+        expect(yield* load(filepath)).toBe("new content here")
+      }),
+    )
+
     it.instance("replaces the first visible line in BOM files", () =>
       Effect.gen(function* () {
         const test = yield* TestInstance

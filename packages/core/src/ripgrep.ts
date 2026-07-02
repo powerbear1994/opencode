@@ -146,7 +146,12 @@ export const layer = Layer.effect(
         Effect.mapError((cause) =>
           cause instanceof Error || cause instanceof InvalidPatternError
             ? cause
-            : failure("ripgrep execution failed", cause),
+            : failure(
+                `ripgrep execution failed${
+                  cause instanceof globalThis.Error && cause.message ? `: ${cause.message}` : ""
+                }`,
+                cause,
+              ),
         ),
       )
     }

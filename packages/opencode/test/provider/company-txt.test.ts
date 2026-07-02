@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import { mkdtemp, readFile, rm } from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
 import type { Info } from "../../src/provider/provider"
 import { createCompanyTxtFetch } from "../../src/provider/company-txt"
 
@@ -68,6 +71,68 @@ describe("company-txt provider", () => {
     }
   })
 
+  test("parses minimax tool calls with unquoted edit parameters", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-minimax-edit" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          return new Response(
+            [
+              "event: chunk",
+              [
+                'data: {"content":"<minimax:tool_call>',
+                '<invoke name=edit>',
+                '<parameter name=filePath>src/App.vue</parameter>',
+                '<parameter name=oldString>old content</parameter>',
+                '<parameter name=newString>new content</parameter>',
+                "</invoke>",
+                '</minimax:tool_call>"}',
+              ].join(""),
+              "",
+            ].join("\n"),
+            { headers: { "content-type": "text/event-stream" } },
+          )
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      const response = await createCompanyTxtFetch(provider(server.url.origin, { adapter: "minimax" }))(
+        "http://company-txt.local/v1/chat/completions",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "qwen3-coder",
+            messages: [{ role: "user", content: "edit the file" }],
+            tools: [{ type: "function", function: { name: "edit", parameters: { type: "object" } } }],
+          }),
+        },
+      )
+      const body = (await response.json()) as {
+        choices: Array<{
+          finish_reason: string
+          message: { tool_calls?: Array<{ function: { name: string; arguments: string } }> }
+        }>
+      }
+
+      expect(body.choices[0]?.finish_reason).toBe("tool_calls")
+      expect(body.choices[0]?.message.tool_calls?.[0]?.function.name).toBe("edit")
+      expect(JSON.parse(body.choices[0]?.message.tool_calls?.[0]?.function.arguments ?? "{}")).toEqual({
+        filePath: "src/App.vue",
+        oldString: "old content",
+        newString: "new content",
+      })
+    } finally {
+      await server.stop(true)
+    }
+  })
+
   test("uses full message events as final output without duplicating streamed chunks", async () => {
     const server = Bun.serve({
       port: 0,
@@ -118,6 +183,47 @@ describe("company-txt provider", () => {
     }
   })
 
+  test("writes raw logs under the configured project root", async () => {
+    const logRoot = await mkdtemp(path.join(os.tmpdir(), "company-txt-log-"))
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-log" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          return new Response(["event: chunk", 'data: {"content":"logged"}', ""].join("\n"), {
+            headers: { "content-type": "text/event-stream" },
+          })
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      const response = await createCompanyTxtFetch(provider(server.url.origin), { logRoot })(
+        "http://company-txt.local/v1/chat/completions",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "qwen3-coder",
+            messages: [{ role: "user", content: "log this" }],
+          }),
+        },
+      )
+      await response.json()
+
+      const log = await readFile(path.join(logRoot, ".opencode", "company-txt-raw.log"), "utf8")
+      expect(log).toContain('"type":"request"')
+      expect(log).toContain('"raw_output":"logged"')
+    } finally {
+      await server.stop(true)
+      await rm(logRoot, { recursive: true, force: true })
+    }
+  })
+
   test("renders tool responses with the previous tool call name", async () => {
     let prompt = ""
     const server = Bun.serve({
@@ -164,6 +270,143 @@ describe("company-txt provider", () => {
 
       expect(prompt).toContain("tool_response name=glob id=call_glob:")
       expect(prompt).not.toContain("tool_response name=call_glob id=call_glob:")
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+  test("instructs models to repair invalid tool arguments", async () => {
+    let prompt = ""
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-invalid-tool" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          const payload = (await request.json()) as { data?: { txt?: string } }
+          prompt = payload.data?.txt ?? ""
+          return new Response(["event: chunk", 'data: {"content":"done"}', ""].join("\n"), {
+            headers: { "content-type": "text/event-stream" },
+          })
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      await createCompanyTxtFetch(provider(server.url.origin))("http://company-txt.local/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "qwen3-coder",
+          messages: [
+            { role: "user", content: "write the file" },
+            {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call_invalid",
+                  type: "function",
+                  function: {
+                    name: "invalid",
+                    arguments: JSON.stringify({
+                      tool: "write",
+                      error:
+                        'The write tool was called with invalid arguments: SchemaError(Missing key\n at ["content"].)\nPlease rewrite the input so it satisfies the expected schema.',
+                    }),
+                  },
+                },
+              ],
+            },
+            {
+              role: "tool",
+              tool_call_id: "call_invalid",
+              content:
+                'The arguments provided to the tool are invalid: The write tool was called with invalid arguments: SchemaError(Missing key\n at ["content"].)\nPlease rewrite the input so it satisfies the expected schema.',
+            },
+          ],
+          tools: [
+            {
+              type: "function",
+              function: {
+                name: "write",
+                parameters: {
+                  type: "object",
+                  required: ["filePath", "content"],
+                  properties: {
+                    filePath: { type: "string" },
+                    content: { type: "string" },
+                  },
+                },
+              },
+            },
+          ],
+        }),
+      })
+
+      expect(prompt).toContain("Include every required property")
+      expect(prompt).toContain("A previous tool response reported invalid arguments")
+      expect(prompt).toContain("call that original tool again")
+      expect(prompt).toContain("tool_response name=invalid id=call_invalid:")
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+  test("instructs models to recover from failed tool calls", async () => {
+    let prompt = ""
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-failed-tool" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          const payload = (await request.json()) as { data?: { txt?: string } }
+          prompt = payload.data?.txt ?? ""
+          return new Response(["event: chunk", 'data: {"content":"done"}', ""].join("\n"), {
+            headers: { "content-type": "text/event-stream" },
+          })
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      await createCompanyTxtFetch(provider(server.url.origin))("http://company-txt.local/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "qwen3-coder",
+          messages: [
+            { role: "user", content: "find package files" },
+            {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call_glob",
+                  type: "function",
+                  function: {
+                    name: "glob",
+                    arguments: JSON.stringify({ pattern: "**/package.json", path: "C:\\Users\\codd-vue" }),
+                  },
+                },
+              ],
+            },
+            { role: "tool", tool_call_id: "call_glob", content: "ripgrep execution failed" },
+          ],
+          tools: [{ type: "function", function: { name: "glob", parameters: { type: "object" } } }],
+        }),
+      })
+
+      expect(prompt).toContain("A previous tool response reported a recoverable failure")
+      expect(prompt).toContain("retry the same tool with corrected arguments")
+      expect(prompt).toContain("tool_response name=glob id=call_glob:")
     } finally {
       await server.stop(true)
     }

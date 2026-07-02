@@ -35,12 +35,7 @@ export const GlobTool = Tool.define(
             },
           })
 
-          let search = params.path ?? ins.directory
-          search = path.isAbsolute(search) ? search : path.resolve(ins.directory, search)
-          const info = yield* fs.stat(search).pipe(Effect.catch(() => Effect.succeed(undefined)))
-          if (info?.type === "File") {
-            throw new Error(`glob path must be a directory: ${search}`)
-          }
+          const search = yield* resolveSearchPath(params.path, ins.directory, ins.worktree, fs)
           yield* assertExternalDirectoryEffect(ctx, search, {
             bypass: false,
             kind: "directory",
@@ -74,3 +69,39 @@ export const GlobTool = Tool.define(
     }
   }),
 )
+
+function resolveSearchPath(input: string | undefined, directory: string, worktree: string, fs: FSUtil.Interface) {
+  return Effect.gen(function* () {
+    const candidates = searchPathCandidates(input, directory, worktree)
+    for (const candidate of candidates) {
+      const info = yield* fs.stat(candidate).pipe(Effect.catch(() => Effect.succeed(undefined)))
+      if (info?.type === "File") throw new Error(`glob path must be a directory: ${candidate}`)
+      if (info?.type === "Directory") return candidate
+    }
+    throw new Error(`glob path does not exist or is not accessible: ${candidates[0] ?? directory}`)
+  })
+}
+
+function searchPathCandidates(input: string | undefined, directory: string, worktree: string) {
+  const raw = input?.trim()
+  if (!raw || raw === "undefined" || raw === "null") return [directory]
+  if (path.isAbsolute(raw)) return [raw]
+  if (!path.win32.isAbsolute(raw)) return [path.resolve(directory, raw)]
+
+  return [
+    windowsPathToWsl(raw),
+    sameLeaf(raw, worktree) ? worktree : undefined,
+    sameLeaf(raw, directory) ? directory : undefined,
+    raw,
+  ].filter((item): item is string => Boolean(item))
+}
+
+function windowsPathToWsl(input: string) {
+  const match = /^(?<drive>[A-Za-z]):[\\/](?<rest>.*)$/.exec(input)
+  if (!match?.groups) return input
+  return path.join("/mnt", match.groups.drive.toLowerCase(), ...match.groups.rest.split(/[\\/]+/).filter(Boolean))
+}
+
+function sameLeaf(input: string, local: string) {
+  return path.win32.basename(input) === path.basename(local)
+}
