@@ -68,6 +68,121 @@ describe("company-txt provider", () => {
     }
   })
 
+  test("keeps package.json content as a string for write tool calls", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-write-json-content" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          return new Response(
+            [
+              "event: chunk",
+              [
+                'data: {"content":"<tool_call>\\n<function=write>\\n',
+                '<parameter=filePath>package.json</parameter>\\n',
+                '<parameter=content>{\\"scripts\\":{\\"build\\":\\"vite build\\"}}</parameter>\\n',
+                '</function>\\n</tool_call>"}',
+              ].join(""),
+              "",
+            ].join("\n"),
+            { headers: { "content-type": "text/event-stream" } },
+          )
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      const response = await createCompanyTxtFetch(provider(server.url.origin))(
+        "http://company-txt.local/v1/chat/completions",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "qwen3-coder",
+            messages: [{ role: "user", content: "write package.json" }],
+            tools: [{ type: "function", function: { name: "write", parameters: { type: "object" } } }],
+          }),
+        },
+      )
+      const body = (await response.json()) as {
+        choices: Array<{
+          message: { tool_calls?: Array<{ function: { arguments: string } }> }
+        }>
+      }
+      const args = JSON.parse(body.choices[0]?.message.tool_calls?.[0]?.function.arguments ?? "{}") as {
+        content?: unknown
+        filePath?: unknown
+      }
+
+      expect(args.filePath).toBe("package.json")
+      expect(args.content).toBe('{"scripts":{"build":"vite build"}}')
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+  test("preserves edit text parameter whitespace", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-edit-whitespace" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          return new Response(
+            [
+              "event: chunk",
+              [
+                'data: {"content":"<tool_call>\\n<function=edit>\\n',
+                '<parameter=filePath>package.json</parameter>\\n',
+                '<parameter=oldString>\\n  \\"scripts\\": {  \\n</parameter>\\n',
+                '<parameter=newString>\\n  \\"scripts\\": {\\n</parameter>\\n',
+                '</function>\\n</tool_call>"}',
+              ].join(""),
+              "",
+            ].join("\n"),
+            { headers: { "content-type": "text/event-stream" } },
+          )
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      const response = await createCompanyTxtFetch(provider(server.url.origin))(
+        "http://company-txt.local/v1/chat/completions",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "qwen3-coder",
+            messages: [{ role: "user", content: "edit package.json" }],
+            tools: [{ type: "function", function: { name: "edit", parameters: { type: "object" } } }],
+          }),
+        },
+      )
+      const body = (await response.json()) as {
+        choices: Array<{
+          message: { tool_calls?: Array<{ function: { arguments: string } }> }
+        }>
+      }
+      const args = JSON.parse(body.choices[0]?.message.tool_calls?.[0]?.function.arguments ?? "{}") as {
+        oldString?: unknown
+        newString?: unknown
+      }
+
+      expect(args.oldString).toBe('  "scripts": {  ')
+      expect(args.newString).toBe('  "scripts": {')
+    } finally {
+      await server.stop(true)
+    }
+  })
+
   test("parses minimax tool calls with unquoted edit parameters", async () => {
     const server = Bun.serve({
       port: 0,
@@ -465,6 +580,158 @@ describe("company-txt provider", () => {
     }
   })
 
+  test("detects invalid tool argument messages case-insensitively", async () => {
+    let prompt = ""
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-invalid-tool-case" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          const payload = (await request.json()) as { data?: { txt?: string } }
+          prompt = payload.data?.txt ?? ""
+          return new Response(["event: chunk", 'data: {"content":"done"}', ""].join("\n"), {
+            headers: { "content-type": "text/event-stream" },
+          })
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      await createCompanyTxtFetch(provider(server.url.origin))("http://company-txt.local/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "qwen3-coder",
+          messages: [
+            { role: "user", content: "write the file" },
+            {
+              role: "tool",
+              tool_call_id: "call_invalid",
+              content:
+                'The arguments provided to the tool are Invalid Arguments: SchemaError(Missing key\n at ["content"].)\nPlease rewrite the input so it SATISFIES THE EXPECTED SCHEMA.',
+            },
+          ],
+          tools: [{ type: "function", function: { name: "write", parameters: { type: "object" } } }],
+        }),
+      })
+
+      expect(prompt).toContain("A previous tool response reported invalid arguments")
+      expect(prompt).toContain("call that original tool again")
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+  test("does not force repeated invalid tool argument retries", async () => {
+    let prompt = ""
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-repeated-invalid-tool" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          const payload = (await request.json()) as { data?: { txt?: string } }
+          prompt = payload.data?.txt ?? ""
+          return new Response(["event: chunk", 'data: {"content":"done"}', ""].join("\n"), {
+            headers: { "content-type": "text/event-stream" },
+          })
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      const invalidContent =
+        'The arguments provided to the tool are invalid: The write tool was called with invalid arguments: SchemaError(Expected string, actual object\n at ["content"].)\nPlease rewrite the input so it satisfies the expected schema.'
+      await createCompanyTxtFetch(provider(server.url.origin))("http://company-txt.local/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "qwen3-coder",
+          messages: [
+            { role: "user", content: "write package.json" },
+            { role: "tool", tool_call_id: "call_invalid_1", content: invalidContent },
+            { role: "tool", tool_call_id: "call_invalid_2", content: invalidContent },
+          ],
+          tools: [
+            {
+              type: "function",
+              function: {
+                name: "write",
+                parameters: {
+                  type: "object",
+                  required: ["filePath", "content"],
+                  properties: {
+                    filePath: { type: "string" },
+                    content: { type: "string" },
+                  },
+                },
+              },
+            },
+          ],
+        }),
+      })
+
+      expect(prompt).toContain("Previous tool responses repeatedly reported invalid arguments")
+      expect(prompt).toContain("Do not retry the same tool call with the same argument shape")
+      expect(prompt).not.toContain("call that original tool again")
+      expect(prompt).not.toContain("do not answer directly")
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+  test("ignores repeated invalid tool arguments before the latest user message", async () => {
+    let prompt = ""
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-old-invalid-tool" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          const payload = (await request.json()) as { data?: { txt?: string } }
+          prompt = payload.data?.txt ?? ""
+          return new Response(["event: chunk", 'data: {"content":"done"}', ""].join("\n"), {
+            headers: { "content-type": "text/event-stream" },
+          })
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      const invalidContent =
+        'The arguments provided to the tool are invalid: The write tool was called with invalid arguments: SchemaError(Expected string, actual object\n at ["content"].)\nPlease rewrite the input so it satisfies the expected schema.'
+      await createCompanyTxtFetch(provider(server.url.origin))("http://company-txt.local/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "qwen3-coder",
+          messages: [
+            { role: "user", content: "write package.json" },
+            { role: "tool", tool_call_id: "call_invalid_1", content: invalidContent },
+            { role: "tool", tool_call_id: "call_invalid_2", content: invalidContent },
+            { role: "user", content: "try a new package edit" },
+          ],
+          tools: [{ type: "function", function: { name: "write", parameters: { type: "object" } } }],
+        }),
+      })
+
+      expect(prompt).not.toContain("Previous tool responses repeatedly reported invalid arguments")
+      expect(prompt).not.toContain("A previous tool response reported invalid arguments")
+    } finally {
+      await server.stop(true)
+    }
+  })
+
   test("instructs models to recover from failed tool calls", async () => {
     let prompt = ""
     const server = Bun.serve({
@@ -716,7 +983,115 @@ describe("company-txt provider", () => {
 
       expect(events.some((event) => event.choices?.[0]?.delta?.content === "checking ")).toBe(true)
       expect(deltas[0]).toMatchObject({ index: 0, type: "function", function: { name: "write", arguments: "" } })
-      expect(JSON.parse(argumentText)).toEqual({ path: "src/App.vue", content: { ok: true } })
+      expect(JSON.parse(argumentText)).toEqual({ path: "src/App.vue", content: '{"ok":true}' })
+      expect(events.findLast((event) => event.choices?.[0])?.choices?.[0]?.finish_reason).toBe("tool_calls")
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+  test("honors parallel_tool_calls false for live OpenAI deltas", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-live-parallel" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          return new Response(
+            [
+              "event: chunk",
+              [
+                'data: {"content":"<tool_call><function=write><parameter=path>a.ts</parameter></function></tool_call>',
+                '<tool_call><function=write><parameter=path>b.ts</parameter></function></tool_call>"}',
+              ].join(""),
+              "",
+            ].join("\n"),
+            { headers: { "content-type": "text/event-stream" } },
+          )
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      const response = await createCompanyTxtFetch(
+        provider(server.url.origin, { stream_tool_call_mode: "live_delta" }),
+      )("http://company-txt.local/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "qwen3-coder",
+          stream: true,
+          parallel_tool_calls: false,
+          messages: [{ role: "user", content: "write two files" }],
+          tools: [{ type: "function", function: { name: "write", parameters: { type: "object" } } }],
+        }),
+      })
+      const events = sseEvents(await response.text())
+      const deltas = events.flatMap((event) => event.choices?.[0]?.delta?.tool_calls ?? [])
+      const argumentsByIndex = new Map<number, string>()
+      deltas.forEach((delta) => {
+        argumentsByIndex.set(delta.index, (argumentsByIndex.get(delta.index) ?? "") + (delta.function?.arguments ?? ""))
+      })
+
+      expect([...argumentsByIndex.keys()]).toEqual([0])
+      expect(JSON.parse(argumentsByIndex.get(0) ?? "{}")).toEqual({ path: "a.ts" })
+      expect(events.findLast((event) => event.choices?.[0])?.choices?.[0]?.finish_reason).toBe("tool_calls")
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+  test("normalizes qwen live JSON tool call file content to strings", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-live-qwen-json-content" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          return new Response(
+            [
+              "event: chunk",
+              [
+                'data: {"content":"<tool_call>{\\"name\\":\\"write\\",\\"arguments\\":',
+                '{\\"filePath\\":\\"package.json\\",\\"content\\":{\\"scripts\\":{\\"build\\":\\"vite build\\"}}}',
+                '}</tool_call>"}',
+              ].join(""),
+              "",
+            ].join("\n"),
+            { headers: { "content-type": "text/event-stream" } },
+          )
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      const response = await createCompanyTxtFetch(
+        provider(server.url.origin, { stream_tool_call_mode: "live_delta" }),
+      )("http://company-txt.local/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "qwen3-coder",
+          stream: true,
+          messages: [{ role: "user", content: "write package.json" }],
+          tools: [{ type: "function", function: { name: "write", parameters: { type: "object" } } }],
+        }),
+      })
+      const events = sseEvents(await response.text())
+      const deltas = events.flatMap((event) => event.choices?.[0]?.delta?.tool_calls ?? [])
+      const args = JSON.parse(deltas.map((delta) => delta.function?.arguments ?? "").join("")) as {
+        content?: unknown
+        filePath?: unknown
+      }
+
+      expect(args.filePath).toBe("package.json")
+      expect(args.content).toBe(JSON.stringify({ scripts: { build: "vite build" } }, null, 2))
       expect(events.findLast((event) => event.choices?.[0])?.choices?.[0]?.finish_reason).toBe("tool_calls")
     } finally {
       await server.stop(true)
@@ -829,6 +1204,112 @@ describe("company-txt provider", () => {
       expect(JSON.parse(deltas.map((delta) => delta.function?.arguments ?? "").join(""))).toEqual({
         keyword: "UserService",
       })
+      expect(events.findLast((event) => event.choices?.[0])?.choices?.[0]?.finish_reason).toBe("tool_calls")
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+  test("reports malformed kimi tool call JSON arguments", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-kimi-bad-json" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          return new Response(
+            [
+              "event: chunk",
+              [
+                'data: {"content":"<|tool_calls_section_begin|><|tool_call_begin|>functions.shell:0',
+                '<|tool_call_argument_begin|>{\\"cmd\\":\\"echo \\"broken\\"\\"}<|tool_call_end|>',
+                '<|tool_calls_section_end|>"}',
+              ].join(""),
+              "",
+            ].join("\n"),
+            { headers: { "content-type": "text/event-stream" } },
+          )
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      const response = await createCompanyTxtFetch(provider(server.url.origin, { adapter: "kimi" }))(
+        "http://company-txt.local/v1/chat/completions",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "qwen3-coder",
+            messages: [{ role: "user", content: "run shell" }],
+            tools: [{ type: "function", function: { name: "shell", parameters: { type: "object" } } }],
+          }),
+        },
+      )
+      const body = (await response.json()) as { error: { message: string; code: string } }
+
+      expect(response.status).toBe(500)
+      expect(body.error.code).toBe("provider_error")
+      expect(body.error.message).toContain("company-txt kimi tool call arguments must be a valid JSON object")
+      expect(body.error.message).toContain("functions.shell:0")
+      expect(body.error.message).toContain("raw_args_preview")
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+  test("normalizes kimi live JSON tool call file content to strings", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-live-kimi-json-content" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          return new Response(
+            [
+              "event: chunk",
+              [
+                'data: {"content":"<|tool_calls_section_begin|><|tool_call_begin|>functions.write:0',
+                '<|tool_call_argument_begin|>{\\"filePath\\":\\"package.json\\",\\"content\\":',
+                '{\\"scripts\\":{\\"build\\":\\"vite build\\"}}}<|tool_call_end|><|tool_calls_section_end|>"}',
+              ].join(""),
+              "",
+            ].join("\n"),
+            { headers: { "content-type": "text/event-stream" } },
+          )
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      const response = await createCompanyTxtFetch(
+        provider(server.url.origin, { adapter: "kimi", stream_tool_call_mode: "live_delta" }),
+      )("http://company-txt.local/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "qwen3-coder",
+          stream: true,
+          messages: [{ role: "user", content: "write package.json" }],
+          tools: [{ type: "function", function: { name: "write", parameters: { type: "object" } } }],
+        }),
+      })
+      const events = sseEvents(await response.text())
+      const deltas = events.flatMap((event) => event.choices?.[0]?.delta?.tool_calls ?? [])
+      const args = JSON.parse(deltas.map((delta) => delta.function?.arguments ?? "").join("")) as {
+        content?: unknown
+        filePath?: unknown
+      }
+
+      expect(deltas[0]).toMatchObject({ id: "functions.write:0", function: { name: "write", arguments: "" } })
+      expect(args.filePath).toBe("package.json")
+      expect(args.content).toBe(JSON.stringify({ scripts: { build: "vite build" } }, null, 2))
       expect(events.findLast((event) => event.choices?.[0])?.choices?.[0]?.finish_reason).toBe("tool_calls")
     } finally {
       await server.stop(true)
@@ -965,6 +1446,77 @@ describe("company-txt provider", () => {
     }
   })
 
+  test("rejects oversized remote images from content length", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/oversized.png") {
+          return new Response("01234567890", {
+            headers: { "content-type": "image/png", "content-length": "11" },
+          })
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      const response = await createCompanyTxtFetch(provider(server.url.origin, { maxUploadImageBytes: 10 }))(
+        "http://company-txt.local/v1/chat/completions",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "qwen3-coder",
+            messages: [
+              {
+                role: "user",
+                content: [
+                  { type: "text", text: "look" },
+                  { type: "image_url", image_url: { url: `${server.url.origin}/oversized.png` } },
+                ],
+              },
+            ],
+          }),
+        },
+      )
+      const body = (await response.json()) as { error: { message: string; param: string | null } }
+
+      expect(response.status).toBe(400)
+      expect(body.error.param).toBe("messages")
+      expect(body.error.message).toContain("image input is too large")
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+  test("rejects oversized data URL images before decoding", async () => {
+    const response = await createCompanyTxtFetch(provider("http://company.local", { maxUploadImageBytes: 2 }))(
+      "http://company-txt.local/v1/chat/completions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "qwen3-coder",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "look" },
+                { type: "image_url", image_url: { url: "data:image/png;base64,QUJD" } },
+              ],
+            },
+          ],
+        }),
+      },
+    )
+    const body = (await response.json()) as { error: { message: string; param: string | null } }
+
+    expect(response.status).toBe(400)
+    expect(body.error.param).toBe("messages")
+    expect(body.error.message).toContain("image input is too large")
+  })
+
   test("returns OpenAI-compatible invalid request errors", async () => {
     const response = await createCompanyTxtFetch(provider("http://company.local", { use_type: "bad" }))(
       "http://company-txt.local/v1/chat/completions",
@@ -979,6 +1531,43 @@ describe("company-txt provider", () => {
     expect(response.status).toBe(400)
     expect(body.error.code).toBe("invalid_provider_config")
     expect(body.error.param).toBeNull()
+  })
+
+  test("returns invalid request errors for malformed JSON request bodies", async () => {
+    const response = await createCompanyTxtFetch(provider("http://company.local"))(
+      "http://company-txt.local/v1/chat/completions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{",
+      },
+    )
+    const body = (await response.json()) as { error: { code: string; param: string | null } }
+
+    expect(response.status).toBe(400)
+    expect(body.error.code).toBe("invalid_request")
+    expect(body.error.param).toBe("body")
+  })
+
+  test("returns request aborted when the request signal is already aborted", async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const response = await createCompanyTxtFetch(provider("http://company.local"))(
+      "http://company-txt.local/v1/chat/completions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: "qwen3-coder",
+          messages: [{ role: "user", content: "hello" }],
+        }),
+      },
+    )
+    const body = (await response.json()) as { error: { code: string } }
+
+    expect(response.status).toBe(499)
+    expect(body.error.code).toBe("request_aborted")
   })
 })
 

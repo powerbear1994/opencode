@@ -101,6 +101,8 @@ type LiveStreamTranslationState = {
   activeParameterName?: string
   activeParameterBuffer: string
   activeParameterStreamingString: boolean
+  activeToolName?: string
+  activeToolCallID?: string
   messageContent?: string
 }
 
@@ -114,6 +116,7 @@ type StopState = {
 const TOOL_MARKERS = ["<tool_call>", "<|tool_calls_section_begin|>", "<minimax:tool_call>"]
 const MAX_TOOL_MARKER_LENGTH = Math.max(...TOOL_MARKERS.map((marker) => marker.length))
 const MAX_TOOL_MARKER_KEEP_LENGTH = MAX_TOOL_MARKER_LENGTH + "tool_call:\n".length
+const TEXT_FILE_CONTENT_PARAMETERS = new Set(["content", "oldString", "newString"])
 
 class CompanyTxtRequestError extends Error {
   readonly status: number
@@ -136,6 +139,7 @@ export function createCompanyTxtFetch(
     if (isModels(input)) return jsonResponse(modelList(provider))
     if (!isChatCompletions(input)) return fetch(input, init)
 
+    const signal = init?.signal ?? undefined
     try {
       const request = await readChatRequest(init?.body)
       const model = requireModel(provider, request.model)
@@ -143,15 +147,15 @@ export function createCompanyTxtFetch(
       const baseURL = selectBaseURL(model)
       const use = useType(config)
       const txtField = stringOption(provider.options.txtField) ?? stringOption(provider.options.txt_field) ?? "txt"
-      const metadata = await buildRequestMetadata(request, provider, model)
+      const metadata = await buildRequestMetadata(request, provider, model, signal)
       const prompt = renderPrompt(request, config)
       const budget = await validatePrompt(prompt, request, model, metadata)
-      const sessionID = await initSession(baseURL, use, metadata)
-      await uploadFiles(baseURL, sessionID, metadata)
+      const sessionID = await initSession(baseURL, use, metadata, signal)
+      await uploadFiles(baseURL, sessionID, metadata, signal)
       const upstream = await fetch(`${baseURL}/chatabc/chat`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        signal: init?.signal,
+        signal,
         body: JSON.stringify({
           appId: "1",
           trCode: "1",
@@ -176,6 +180,7 @@ export function createCompanyTxtFetch(
       if (error instanceof CompanyTxtRequestError) {
         return errorResponse(error.message, error.code, error.status, error.param)
       }
+      if (signal?.aborted) return errorResponse("company-txt request was aborted", "request_aborted", 499)
       return errorResponse(
         error instanceof Error ? error.message : "Company TXT provider failed",
         "provider_error",
@@ -208,10 +213,14 @@ function modelList(provider: Info) {
 }
 
 async function readChatRequest(body: BodyInit | null | undefined): Promise<ChatRequest> {
-  if (typeof body === "string") return JSON.parse(body) as ChatRequest
-  if (body instanceof Uint8Array) return JSON.parse(new TextDecoder().decode(body)) as ChatRequest
-  if (body instanceof Blob) return JSON.parse(await body.text()) as ChatRequest
-  throw new Error("company-txt provider expected a JSON chat/completions body")
+  try {
+    if (typeof body === "string") return JSON.parse(body) as ChatRequest
+    if (body instanceof Uint8Array) return JSON.parse(new TextDecoder().decode(body)) as ChatRequest
+    if (body instanceof Blob) return JSON.parse(await body.text()) as ChatRequest
+  } catch {
+    throw new CompanyTxtRequestError("company-txt request body must be valid JSON", { param: "body" })
+  }
+  throw new CompanyTxtRequestError("company-txt provider expected a JSON chat/completions body", { param: "body" })
 }
 
 function requireModel(provider: Info, modelID: string | undefined) {
@@ -245,10 +254,16 @@ function useType(config: Record<string, unknown>) {
   })
 }
 
-async function initSession(baseURL: string, useType: string, metadata: RequestMetadata) {
+async function initSession(
+  baseURL: string,
+  useType: string,
+  metadata: RequestMetadata,
+  signal: AbortSignal | undefined,
+) {
   const response = await fetch(`${baseURL}/chatabc/init_session`, {
     method: "POST",
     headers: { "content-type": "application/json" },
+    signal,
     body: JSON.stringify(
       useType === "workflow"
         ? {
@@ -285,12 +300,17 @@ async function initSession(baseURL: string, useType: string, metadata: RequestMe
   return json.data.session_id
 }
 
-async function uploadFiles(baseURL: string, sessionID: string, metadata: RequestMetadata) {
+async function uploadFiles(
+  baseURL: string,
+  sessionID: string,
+  metadata: RequestMetadata,
+  signal: AbortSignal | undefined,
+) {
   for (const upload of imageUploads(metadata)) {
     const form = new FormData()
     form.set("session_id", sessionID)
     form.set("file", new Blob([upload.content.slice().buffer], { type: upload.contentType }), upload.filename)
-    const response = await fetch(`${baseURL}/chatabc/upload_file`, { method: "POST", body: form })
+    const response = await fetch(`${baseURL}/chatabc/upload_file`, { method: "POST", body: form, signal })
     if (!response.ok) throw new Error(`company-txt upload_file failed: ${response.status}`)
     const body = (await response.json().catch(() => ({}))) as { resCode?: string; resMessage?: string }
     if (body.resCode !== undefined && body.resCode !== "FAIAG0000") {
@@ -394,16 +414,31 @@ function responseFormatInstruction(format: Record<string, unknown> | undefined) 
 }
 
 function toolFailureRetryInstruction(messages: ChatMessage[] | undefined) {
-  if (messages?.some(isInvalidToolArgumentMessage)) {
+  const recent = recentMessagesSinceLastUser(messages)
+  const invalidArgumentCount = recent.filter(isInvalidToolArgumentMessage).length
+  if (invalidArgumentCount > 1) {
+    return "Previous tool responses repeatedly reported invalid arguments. Do not retry the same tool call with the same argument shape. If you can provide valid corrected arguments, do so once; otherwise explain the blocker or choose a materially different tool/input."
+  }
+  if (invalidArgumentCount === 1) {
     return "A previous tool response reported invalid arguments. Treat it as a schema repair request: identify the original tool named in the error, call that original tool again with corrected arguments that satisfy its schema, and do not answer directly."
   }
-  if (!messages?.some(isFailedToolMessage)) return
+  const failedToolCount = recent.filter(isNonArgumentToolFailureMessage).length
+  if (failedToolCount > 1) {
+    return "Previous tool responses repeatedly reported recoverable failures. Do not retry the same failing tool call unchanged. Try a materially different tool/input if available; otherwise explain the blocker."
+  }
+  if (!failedToolCount) return
   return "A previous tool response reported a recoverable failure. Do not stop after the failed tool call; inspect the error, then retry the same tool with corrected arguments or use another appropriate tool before answering."
+}
+
+function recentMessagesSinceLastUser(messages: ChatMessage[] | undefined) {
+  if (!messages?.length) return []
+  const lastUserIndex = messages.findLastIndex((message) => message.role === "user")
+  return lastUserIndex >= 0 ? messages.slice(lastUserIndex + 1) : messages
 }
 
 function isInvalidToolArgumentMessage(message: ChatMessage) {
   if (message.role !== "tool") return false
-  const content = normalizedContent(message.content)
+  const content = normalizedContent(message.content).toLowerCase()
   return content.includes("invalid arguments") && content.includes("satisfies the expected schema")
 }
 
@@ -411,6 +446,10 @@ function isFailedToolMessage(message: ChatMessage) {
   if (message.role !== "tool") return false
   const content = normalizedContent(message.content).toLowerCase()
   return TOOL_FAILURE_MARKERS.some((marker) => content.includes(marker))
+}
+
+function isNonArgumentToolFailureMessage(message: ChatMessage) {
+  return isFailedToolMessage(message) && !isInvalidToolArgumentMessage(message)
 }
 
 const TOOL_FAILURE_MARKERS = [
@@ -692,7 +731,7 @@ async function streamLiveDelta(
     const filtered = step.content ? pushStop(stopState, step.content) : undefined
     if (filtered) controller.enqueue(input.encoder.encode(contentChunk(input.completionID, input.created, input.request, filtered)))
     if (stopState.stopped) break
-    step.toolCalls.forEach((delta) =>
+    applyLiveToolCallPolicy(step.toolCalls, input.request).forEach((delta) =>
       controller.enqueue(input.encoder.encode(toolCallDeltaChunk(input.completionID, input.created, input.request, delta))),
     )
   }
@@ -835,12 +874,16 @@ function parseQwenOutput(raw: string): ParsedOutput {
       if (body.startsWith("{")) return jsonToolCall(body)
       const fn = /<function=(?<name>.*?)>\s*(?<body>.*?)<\/function>/s.exec(body)
       if (!fn?.groups?.name) throw new Error("company-txt qwen tool call parse failed")
+      const toolName = fn.groups.name.trim()
       const args = Object.fromEntries(
-        [...(fn.groups.body ?? "").matchAll(/<parameter=(?<name>.*?)>\s*(?<value>.*?)\s*<\/parameter>/gs)].map(
-          (param) => [param.groups?.name?.trim() ?? "", parseParameter(param.groups?.value?.trim() ?? "")],
+        [...(fn.groups.body ?? "").matchAll(/<parameter=(?<name>.*?)>(?<value>.*?)<\/parameter>/gs)].map(
+          (param) => {
+            const parameterName = param.groups?.name?.trim() ?? ""
+            return [parameterName, parseToolParameter(toolName, parameterName, param.groups?.value ?? "")]
+          },
         ),
       )
-      return openAIToolCall(id("call"), fn.groups.name.trim(), args)
+      return openAIToolCall(id("call"), toolName, args)
     }),
   }
 }
@@ -857,13 +900,14 @@ function parseKimiOutput(raw: string): ParsedOutput {
   return {
     type: "tool_calls",
     content: toolCallContent(raw.replace(/<\|tool_calls_section_begin\|>.*?<\|tool_calls_section_end\|>/gs, "")),
-    toolCalls: matches.map((match) =>
-      openAIToolCall(
-        match.groups?.id ?? id("call"),
-        kimiFunctionName(match.groups?.id ?? ""),
-        parseObject(match.groups?.args ?? "{}"),
-      ),
-    ),
+    toolCalls: matches.map((match) => {
+      const callID = match.groups?.id ?? id("call")
+      return openAIToolCall(
+        callID,
+        kimiFunctionName(callID),
+        parseKimiToolArguments(match.groups?.args ?? "{}", callID),
+      )
+    }),
   }
 }
 
@@ -888,17 +932,18 @@ function parseMiniMaxOutput(raw: string): ParsedOutput {
       if (body.trim().startsWith("{")) return jsonToolCall(body.trim())
       const invoke = minimaxInvoke(body)
       if (!invoke?.name) throw new Error("company-txt minimax tool call parse failed")
+      const toolName = invoke.name.trim()
       const args = Object.fromEntries(
         [
           ...invoke.body.matchAll(
-            /<parameter\s+name=(?:"(?<double>[^"]+)"|'(?<single>[^']+)'|(?<bare>[^\s>]+))\s*>\s*(?<value>.*?)\s*<\/parameter>/gs,
+            /<parameter\s+name=(?:"(?<double>[^"]+)"|'(?<single>[^']+)'|(?<bare>[^\s>]+))\s*>(?<value>.*?)<\/parameter>/gs,
           ),
-        ].map((param) => [
-          (param.groups?.double ?? param.groups?.single ?? param.groups?.bare ?? "").trim(),
-          parseParameter(param.groups?.value?.trim() ?? ""),
-        ]),
+        ].map((param) => {
+          const parameterName = (param.groups?.double ?? param.groups?.single ?? param.groups?.bare ?? "").trim()
+          return [parameterName, parseToolParameter(toolName, parameterName, param.groups?.value ?? "")]
+        }),
       )
-      return openAIToolCall(id("call"), invoke.name.trim(), args)
+      return openAIToolCall(id("call"), toolName, args)
     }),
   }
 }
@@ -929,7 +974,7 @@ function jsonToolCall(raw: string) {
 }
 
 function openAIToolCall(callID: string, name: string, args: Record<string, unknown>): OpenAIToolCall {
-  return { id: callID, type: "function", function: { name, arguments: JSON.stringify(args) } }
+  return { id: callID, type: "function", function: { name, arguments: JSON.stringify(normalizeToolArguments(name, args)) } }
 }
 
 function kimiFunctionName(callID: string) {
@@ -937,6 +982,13 @@ function kimiFunctionName(callID: string) {
     /^functions\.(?<name>[A-Za-z_][\w.-]*):\d+$/.exec(callID)?.groups?.name ??
     callID.split(/[:|\s]+/).find((part) => part && !part.startsWith("call_")) ??
     "unknown"
+  )
+}
+
+function parseKimiToolArguments(input: string, callID: string) {
+  return parseStrictObject(
+    input,
+    `company-txt kimi tool call arguments must be a valid JSON object for ${callID}`,
   )
 }
 
@@ -1089,16 +1141,30 @@ function consumeLiveKimi(state: LiveStreamTranslationState): LiveToolCallDelta[]
     if (state.nativeState === "kimi_arguments") {
       const endIndex = state.pending.indexOf(endMarker)
       if (endIndex >= 0) {
-        const argumentDelta = state.pending.slice(0, endIndex)
-        if (argumentDelta) deltas.push(argumentsLiveDelta(state, argumentDelta))
+        state.activeParameterBuffer += state.pending.slice(0, endIndex)
+        deltas.push(
+          argumentsLiveDelta(
+            state,
+            JSON.stringify(
+              normalizeToolArguments(
+                state.activeToolName ?? "",
+                parseKimiToolArguments(
+                  state.activeParameterBuffer,
+                  state.activeToolCallID ?? state.activeToolName ?? "unknown",
+                ),
+              ),
+            ),
+          ),
+        )
         state.pending = state.pending.slice(endIndex + endMarker.length)
+        state.activeParameterBuffer = ""
         consumeOptionalKimiSectionEnd(state)
         state.nativeState = "done"
         continue
       }
       const safeLength = liveSafeFlushLength(state.pending, endMarker)
       if (safeLength > 0) {
-        deltas.push(argumentsLiveDelta(state, state.pending.slice(0, safeLength)))
+        state.activeParameterBuffer += state.pending.slice(0, safeLength)
         state.pending = state.pending.slice(safeLength)
       }
       return deltas
@@ -1162,11 +1228,12 @@ function consumeLiveQwenJsonToolCall(state: LiveStreamTranslationState): LiveToo
   const raw = state.pending.slice(0, endIndex).trim()
   state.pending = state.pending.slice(endIndex + endMarker.length)
   const data = parseObject(raw)
+  const name = stringOption(data.name) ?? "unknown"
   state.emittedArgumentPrefix = true
   state.nativeState = "done"
   return [
-    startLiveToolCall(state, stringOption(data.name) ?? "unknown", stringOption(data.id)),
-    argumentsLiveDelta(state, JSON.stringify(parseObject(data.arguments ?? {}))),
+    startLiveToolCall(state, name, stringOption(data.id)),
+    argumentsLiveDelta(state, JSON.stringify(normalizeToolArguments(name, parseObject(data.arguments ?? {})))),
   ]
 }
 
@@ -1240,6 +1307,16 @@ function consumeLiveParameterValue(state: LiveStreamTranslationState, style: Too
 function parameterValueLiveDelta(state: LiveStreamTranslationState, valueDelta: string, isFinal: boolean) {
   const deltas: LiveToolCallDelta[] = []
   if (valueDelta) state.activeParameterBuffer += valueDelta
+  if (shouldPreserveParameterText(state.activeToolName ?? "", state.activeParameterName ?? "")) {
+    if (!isFinal) return deltas
+    return [
+      argumentsLiveDelta(
+        state,
+        liveParameterJsonPrefix(state) +
+          JSON.stringify(parseToolParameter(state.activeToolName ?? "", state.activeParameterName ?? "", state.activeParameterBuffer)),
+      ),
+    ]
+  }
   if (state.activeParameterStreamingString) {
     if (valueDelta) deltas.push(argumentsLiveDelta(state, jsonStringFragment(valueDelta)))
     if (isFinal) deltas.push(argumentsLiveDelta(state, '"'))
@@ -1247,7 +1324,7 @@ function parameterValueLiveDelta(state: LiveStreamTranslationState, valueDelta: 
   }
   const stripped = state.activeParameterBuffer.trimStart()
   if (!stripped && !isFinal) return deltas
-  if (!isFinal && shouldStreamAsString(stripped)) {
+  if (!isFinal && shouldStreamAsString(state, stripped)) {
     state.activeParameterStreamingString = true
     return [argumentsLiveDelta(state, liveParameterJsonPrefix(state) + '"' + jsonStringFragment(state.activeParameterBuffer))]
   }
@@ -1255,7 +1332,10 @@ function parameterValueLiveDelta(state: LiveStreamTranslationState, valueDelta: 
   return [
     argumentsLiveDelta(
       state,
-      liveParameterJsonPrefix(state) + JSON.stringify(parseParameter(state.activeParameterBuffer.trim())),
+      liveParameterJsonPrefix(state) +
+        JSON.stringify(
+          parseToolParameter(state.activeToolName ?? "", state.activeParameterName ?? "", state.activeParameterBuffer),
+        ),
     ),
   ]
 }
@@ -1288,6 +1368,8 @@ function finishLiveArgumentObject(state: LiveStreamTranslationState) {
 
 function startLiveToolCall(state: LiveStreamTranslationState, name: string, callID?: string): LiveToolCallDelta {
   state.toolStarted = true
+  state.activeToolName = name
+  state.activeToolCallID = callID
   return {
     index: state.toolIndex,
     id: callID ?? id("call"),
@@ -1331,6 +1413,8 @@ function resetLiveToolCallState(state: LiveStreamTranslationState) {
   state.activeParameterName = undefined
   state.activeParameterBuffer = ""
   state.activeParameterStreamingString = false
+  state.activeToolName = undefined
+  state.activeToolCallID = undefined
 }
 
 function argumentsLiveDelta(state: LiveStreamTranslationState, argumentsDelta: string): LiveToolCallDelta {
@@ -1378,7 +1462,8 @@ function toolMarker(style: ToolCallStyle) {
   return "<tool_call>"
 }
 
-function shouldStreamAsString(value: string) {
+function shouldStreamAsString(state: LiveStreamTranslationState, value: string) {
+  if (shouldPreserveParameterText(state.activeToolName ?? "", state.activeParameterName ?? "")) return true
   return (
     !["{", "[", '"', "-", "+"].some((prefix) => value.startsWith(prefix)) &&
     !["true", "false", "null"].some((prefix) => value.startsWith(prefix)) &&
@@ -1484,7 +1569,12 @@ function firstStopIndex(text: string, stop: string[]) {
   return Math.min(...indexes)
 }
 
-async function buildRequestMetadata(request: ChatRequest, provider: Info, model: Model): Promise<RequestMetadata> {
+async function buildRequestMetadata(
+  request: ChatRequest,
+  provider: Info,
+  model: Model,
+  signal: AbortSignal | undefined,
+): Promise<RequestMetadata> {
   const metadata: RequestMetadata = { ...(request.metadata ?? {}) }
   delete metadata.image_uploads
   const uploads = await collectImageUploads(
@@ -1493,16 +1583,26 @@ async function buildRequestMetadata(request: ChatRequest, provider: Info, model:
     numberOption(model.options.maxUploadImageBytes) ??
       numberOption(provider.options.maxUploadImageBytes) ??
       10 * 1024 * 1024,
+    numberOption(model.options.maxUploadImageDownloadMs) ??
+      numberOption(provider.options.maxUploadImageDownloadMs) ??
+      30_000,
+    signal,
   )
   if (uploads.length) metadata.image_uploads = uploads
   return metadata
 }
 
-async function collectImageUploads(messages: ChatMessage[], maxImages: number, maxImageBytes: number) {
+async function collectImageUploads(
+  messages: ChatMessage[],
+  maxImages: number,
+  maxImageBytes: number,
+  maxImageDownloadMs: number,
+  signal: AbortSignal | undefined,
+) {
   const urls = messages.flatMap((message) => imageURLs(message.content))
   if (urls.length > maxImages)
     throw new CompanyTxtRequestError(`company-txt supports at most ${maxImages} image input(s)`, { param: "messages" })
-  return Promise.all(urls.map((url, index) => imageUpload(url, index + 1, maxImageBytes)))
+  return Promise.all(urls.map((url, index) => imageUpload(url, index + 1, maxImageBytes, maxImageDownloadMs, signal)))
 }
 
 function imageURLs(content: unknown): string[] {
@@ -1515,21 +1615,41 @@ function imageURLs(content: unknown): string[] {
     .filter((url): url is string => Boolean(url))
 }
 
-async function imageUpload(url: string, index: number, maxBytes: number): Promise<ImageUpload> {
+async function imageUpload(
+  url: string,
+  index: number,
+  maxBytes: number,
+  maxDownloadMs: number,
+  signal: AbortSignal | undefined,
+): Promise<ImageUpload> {
   if (url.startsWith("data:")) return dataURLImageUpload(url, index, maxBytes)
   if (!url.startsWith("http://") && !url.startsWith("https://")) {
     throw new CompanyTxtRequestError("company-txt only supports data:image/...;base64 and http(s) image URLs", {
       param: "messages",
     })
   }
-  const response = await fetch(url)
-  if (!response.ok) throw new Error(`company-txt failed to download image: ${response.status}`)
-  const contentType = (response.headers.get("content-type") ?? "image/png").split(";")[0]!.trim()
-  if (!contentType.startsWith("image/"))
-    throw new CompanyTxtRequestError(`company-txt image URL returned ${contentType}`, { param: "messages" })
-  const content = new Uint8Array(await response.arrayBuffer())
-  validateImageBytes(content, maxBytes)
-  return { filename: filenameFromURL(url, contentType, index), content, contentType }
+  const abort = imageDownloadAbort(signal, maxDownloadMs)
+  try {
+    const response = await fetch(url, { signal: abort.signal })
+    if (!response.ok) throw new Error(`company-txt failed to download image: ${response.status}`)
+    const contentLength = responseContentLength(response)
+    if (contentLength !== undefined) validateImageBytes(contentLength, maxBytes)
+    const contentType = (response.headers.get("content-type") ?? "image/png").split(";")[0]!.trim()
+    if (!contentType.startsWith("image/"))
+      throw new CompanyTxtRequestError(`company-txt image URL returned ${contentType}`, { param: "messages" })
+    const content = new Uint8Array(await response.arrayBuffer())
+    validateImageBytes(content.length, maxBytes)
+    return { filename: filenameFromURL(url, contentType, index), content, contentType }
+  } catch (error) {
+    if (abort.timedOut()) {
+      throw new CompanyTxtRequestError(`company-txt image download timed out after ${maxDownloadMs}ms`, {
+        param: "messages",
+      })
+    }
+    throw error
+  } finally {
+    abort.cleanup()
+  }
 }
 
 function dataURLImageUpload(url: string, index: number, maxBytes: number): ImageUpload {
@@ -1542,14 +1662,56 @@ function dataURLImageUpload(url: string, index: number, maxBytes: number): Image
     throw new CompanyTxtRequestError(`company-txt unsupported image content type: ${contentType}`, {
       param: "messages",
     })
-  const content = new Uint8Array(Buffer.from(payload, "base64"))
-  validateImageBytes(content, maxBytes)
+  const base64 = normalizeBase64Payload(payload, maxBytes)
+  const content = new Uint8Array(Buffer.from(base64, "base64"))
+  validateImageBytes(content.length, maxBytes)
   return { filename: `image_${index}${extensionForContentType(contentType)}`, content, contentType }
 }
 
-function validateImageBytes(content: Uint8Array, maxBytes: number) {
-  if (content.length > maxBytes)
-    throw new CompanyTxtRequestError(`company-txt image input is too large: ${content.length} > ${maxBytes}`, {
+function imageDownloadAbort(signal: AbortSignal | undefined, maxDownloadMs: number) {
+  const controller = new AbortController()
+  let timedOut = false
+  const timeout =
+    maxDownloadMs > 0
+      ? setTimeout(() => {
+          timedOut = true
+          controller.abort()
+        }, maxDownloadMs)
+      : undefined
+  const abort = () => controller.abort()
+  if (signal?.aborted) controller.abort()
+  else signal?.addEventListener("abort", abort, { once: true })
+  return {
+    signal: controller.signal,
+    timedOut: () => timedOut,
+    cleanup: () => {
+      if (timeout) clearTimeout(timeout)
+      signal?.removeEventListener("abort", abort)
+    },
+  }
+}
+
+function normalizeBase64Payload(payload: string, maxBytes: number) {
+  const normalized = payload.replace(/\s/g, "")
+  validateImageBytes(estimatedBase64Bytes(normalized), maxBytes)
+  return normalized
+}
+
+function estimatedBase64Bytes(input: string) {
+  const padding = input.endsWith("==") ? 2 : input.endsWith("=") ? 1 : 0
+  return Math.max(0, Math.floor((input.length * 3) / 4) - padding)
+}
+
+function responseContentLength(response: Response) {
+  const value = response.headers.get("content-length")
+  if (!value) return
+  const size = Number(value)
+  return Number.isFinite(size) && size >= 0 ? size : undefined
+}
+
+function validateImageBytes(size: number, maxBytes: number) {
+  if (size > maxBytes)
+    throw new CompanyTxtRequestError(`company-txt image input is too large: ${size} > ${maxBytes}`, {
       param: "messages",
     })
 }
@@ -1686,6 +1848,11 @@ function applyToolCallPolicy(toolCalls: OpenAIToolCall[], request: ChatRequest) 
   return toolCalls
 }
 
+function applyLiveToolCallPolicy(toolCalls: LiveToolCallDelta[], request: ChatRequest) {
+  if (request.parallel_tool_calls === false) return toolCalls.filter((toolCall) => toolCall.index === 0)
+  return toolCalls
+}
+
 function stopText(content: string, stop: string[]) {
   const indexes = stop.map((item) => content.indexOf(item)).filter((index) => index >= 0)
   if (!indexes.length) return content
@@ -1708,9 +1875,52 @@ function parseParameter(value: string): unknown {
   return parseJson(value, value)
 }
 
+function parseToolParameter(toolName: string, parameterName: string, value: string): unknown {
+  if (shouldPreserveParameterText(toolName, parameterName)) return unwrapToolParameterText(value)
+  return parseParameter(value.trim())
+}
+
+function normalizeToolArguments(toolName: string, args: Record<string, unknown>) {
+  return Object.fromEntries(
+    Object.entries(args).map(([parameterName, value]) => [
+      parameterName,
+      shouldPreserveParameterText(toolName, parameterName) && typeof value !== "string"
+        ? JSON.stringify(value, null, 2)
+        : value,
+    ]),
+  )
+}
+
+function shouldPreserveParameterText(toolName: string, parameterName: string) {
+  if (!TEXT_FILE_CONTENT_PARAMETERS.has(parameterName)) return false
+  return toolName === "write" || toolName === "edit"
+}
+
+function unwrapToolParameterText(value: string) {
+  const withoutLeading = value.startsWith("\r\n")
+    ? value.slice(2)
+    : value.startsWith("\n")
+      ? value.slice(1)
+      : value
+  if (withoutLeading.endsWith("\r\n")) return withoutLeading.slice(0, -2)
+  if (withoutLeading.endsWith("\n")) return withoutLeading.slice(0, -1)
+  return withoutLeading
+}
+
 function parseObject(input: unknown): Record<string, unknown> {
   if (isRecord(input)) return input
   return parseJson(String(input), {})
+}
+
+function parseStrictObject(input: string, context: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(input) as unknown
+    if (isRecord(parsed)) return parsed
+    throw new Error("expected JSON object")
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "invalid JSON"
+    throw new Error(`${context}: ${message}; raw_args_preview=${JSON.stringify(input.slice(0, 500))}`)
+  }
 }
 
 function parseJsonRecord(input: string): Record<string, unknown> {
