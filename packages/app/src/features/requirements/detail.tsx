@@ -76,7 +76,7 @@ export const RequirementDetail: Component<{
   const [creating, setCreating] = createSignal(false)
   const [savingDocument, setSavingDocument] = createSignal(false)
   const [documentDraft, setDocumentDraft] = createSignal("")
-  const [documentMode, setDocumentMode] = createSignal<"raw" | "clarified">("clarified")
+  const [documentMode, setDocumentMode] = createSignal<"raw" | "clarified">("raw")
   const [clarifiedView, setClarifiedView] = createSignal<"edit" | "preview">("preview")
   const [showCreateConfirm, setShowCreateConfirm] = createSignal(false)
   const [sidebarVisible, setSidebarVisible] = createSignal(true)

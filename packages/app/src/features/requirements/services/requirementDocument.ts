@@ -1,18 +1,19 @@
 import type { ServerConnection } from "@/context/server"
 import { authTokenFromCredentials } from "@/utils/server"
 import type { RequirementItem } from "../types"
+import { requirementDocuments } from "./requirementProjectStore"
 
 export const requirementDocumentPath = (requirementId: string) =>
-  `docs/ai-workflow/${safeRequirementId(requirementId)}/01-requirement.md`
+  requirementDocuments(requirementId).requirement
 
 export const designDocumentPath = (requirementId: string) =>
-  `docs/ai-workflow/${safeRequirementId(requirementId)}/02-design.md`
+  requirementDocuments(requirementId).design
 
 export const developmentDocumentPath = (requirementId: string) =>
-  `docs/ai-workflow/${safeRequirementId(requirementId)}/03-development.md`
+  requirementDocuments(requirementId).development
 
 export const testDocumentPath = (requirementId: string) =>
-  `docs/ai-workflow/${safeRequirementId(requirementId)}/04-test.md`
+  requirementDocuments(requirementId).test
 
 export async function loadRequirementDocument(input: {
   server: ServerConnection.Any | undefined
@@ -69,11 +70,15 @@ export async function saveRequirementDocument(input: {
 
 async function readRequirementDocument(server: ServerConnection.Any | undefined, project: string, path: string) {
   if (!(await requirementDocumentExists(server, project, path))) return undefined
-  const response = await fetch(requirementUrl(server, project, `/api/fs/read/${path}`), {
+  const response = await fetch(requirementUrl(server, project, readPath(path)), {
     headers: requestHeaders(server, project),
   })
   if (!response.ok) return undefined
   return await response.text()
+}
+
+function readPath(path: string) {
+  return `/api/fs/read/${encodeURIComponent(path)}`
 }
 
 async function requirementDocumentExists(server: ServerConnection.Any | undefined, project: string, path: string) {
@@ -136,8 +141,4 @@ function requestHeaders(server: ServerConnection.Any | undefined, project: strin
     password: server.http.password,
   })}`
   return headers
-}
-
-function safeRequirementId(requirementId: string) {
-  return requirementId.replace(/[\\/]/g, "-").replace(/\.\.+/g, ".")
 }

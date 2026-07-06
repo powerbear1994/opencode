@@ -1,8 +1,10 @@
 import { For, Show, createEffect, createMemo, createResource, createSignal, onCleanup, type Component } from "solid-js"
+import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { Icon } from "@opencode-ai/ui/v2/icon"
 import { useLanguage } from "@/context/language"
 import { useServer } from "@/context/server"
 import { useServerSDK } from "@/context/server-sdk"
+import { showToast } from "@/utils/toast"
 import { useRequirements } from "./provider"
 import { StatusBadge, PriorityBadge } from "./badge"
 import { useRequirementWorkflow } from "./services/requirementWorkflowStore"
@@ -145,9 +147,17 @@ export const RequirementList: Component<{
   const workflow = useRequirementWorkflow()
   const [search, setSearch] = createSignal("")
   const [filter, setFilter] = createSignal<RequirementFilter>("all")
+  const [showCreate, setShowCreate] = createSignal(false)
+  const [creatingRequirement, setCreatingRequirement] = createSignal(false)
+  const [newTitle, setNewTitle] = createSignal("")
+  const [newDescription, setNewDescription] = createSignal("")
+  const [newPriority, setNewPriority] = createSignal<RequirementItem["priority"]>("medium")
+  const [newAssignee, setNewAssignee] = createSignal("")
+  const [newImplementer, setNewImplementer] = createSignal("")
   const stage = createMemo(() => props.stage ?? "requirement")
   const filters = createMemo(() => (stage() === "design" ? DESIGN_FILTERS : REQUIREMENT_FILTERS))
   const hasSearch = createMemo(() => search().trim().length > 0)
+  const canCreateRequirement = createMemo(() => newTitle().trim().length > 0 && newDescription().trim().length > 0)
   const currentEmptyText = createMemo(() =>
     emptyText({ stage: stage(), filter: filter(), hasSearch: hasSearch(), emptyMessage: props.emptyMessage }),
   )
@@ -251,6 +261,49 @@ export const RequirementList: Component<{
     props.onDefaultSelect?.(first.id)
   })
 
+  function resetCreateForm() {
+    setNewTitle("")
+    setNewDescription("")
+    setNewPriority("medium")
+    setNewAssignee("")
+    setNewImplementer("")
+  }
+
+  function closeCreateForm() {
+    setShowCreate(false)
+    resetCreateForm()
+  }
+
+  async function handleCreateRequirement() {
+    const project = props.project
+    if (!project || !canCreateRequirement() || creatingRequirement()) return
+    setCreatingRequirement(true)
+    try {
+      const requirement = await backend.createRequirement(project, {
+        title: newTitle().trim(),
+        description: newDescription().trim(),
+        priority: newPriority(),
+        assignee: newAssignee().trim() || undefined,
+        implementer: newImplementer().trim() || undefined,
+      })
+      closeCreateForm()
+      setSearch("")
+      setFilter("all")
+      await refetch()
+      props.onSelect(requirement.id)
+      showToast({ title: "需求已新增", variant: "success" })
+    } catch {
+      showToast({ title: "新增需求失败", variant: "error" })
+    } finally {
+      setCreatingRequirement(false)
+    }
+  }
+
+  function handleRefreshList() {
+    void refetch()
+    void refetchGeneratedDocuments()
+  }
+
   function renderStageBadge(req: RequirementItem) {
     const generated = generatedDocuments()?.has(req.id) ?? false
     if (stage() === "test") {
@@ -318,27 +371,49 @@ export const RequirementList: Component<{
       <Show when={props.project}>
         {/* Search */}
         <div class="shrink-0 px-4 pt-3 pb-2">
-          <div class="relative">
-            <Icon
-              name="magnifying-glass"
-              size="small"
-              class="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--v2-text-text-faint)]"
-            />
-            <input
-              type="text"
-              value={search()}
-              onInput={(e) => setSearch(e.currentTarget.value)}
-              placeholder={language.t("requirements.list.searchPlaceholder")}
-              class="w-full h-8 pl-8 pr-3 rounded-[6px] bg-[var(--v2-background-bg-layer-01)] text-[13px] text-[var(--v2-text-text-base)] placeholder:text-[var(--v2-text-text-faint)] outline-none border border-transparent focus:border-[var(--v2-blue-400)] transition-colors"
-            />
+          <div class="flex items-center gap-2">
+            <div class="relative min-w-0 flex-1">
+              <Icon
+                name="magnifying-glass"
+                size="small"
+                class="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--v2-text-text-faint)]"
+              />
+              <input
+                type="text"
+                value={search()}
+                onInput={(e) => setSearch(e.currentTarget.value)}
+                placeholder={language.t("requirements.list.searchPlaceholder")}
+                class="w-full h-8 pl-8 pr-3 rounded-[6px] bg-[var(--v2-background-bg-layer-01)] text-[13px] text-[var(--v2-text-text-base)] placeholder:text-[var(--v2-text-text-faint)] outline-none border border-transparent focus:border-[var(--v2-blue-400)] transition-colors"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={handleRefreshList}
+              class="flex size-8 shrink-0 items-center justify-center rounded-[6px] text-[var(--v2-text-text-muted)] transition-colors hover:bg-[var(--v2-background-bg-layer-01)] hover:text-[var(--v2-text-text-base)]"
+              aria-label="刷新列表"
+              title="刷新列表"
+            >
+              <Icon name="reset" size="small" class="size-3.5" />
+            </button>
+            <Show when={stage() === "requirement"}>
+              <ButtonV2
+                size="small"
+                variant="ghost-muted"
+                icon="plus"
+                class="h-8 w-8 shrink-0 justify-center bg-transparent"
+                aria-label="新增需求"
+                title="新增需求"
+                onClick={() => setShowCreate(true)}
+              />
+            </Show>
           </div>
-          <div class="mt-2 flex gap-1 overflow-x-auto">
+          <div class="mt-2 flex gap-2 overflow-x-auto">
             <For each={filters()}>
               {(item) => (
                 <button
                   type="button"
                   onClick={() => setFilter(item.id)}
-                  class="h-7 shrink-0 rounded-[5px] px-2.5 text-[11px] font-[530] transition-colors"
+                  class="h-7 shrink-0 rounded-[5px] px-3 text-[11px] font-[530] transition-colors"
                   classList={{
                     "bg-[var(--v2-background-bg-layer-02)] text-[var(--v2-text-text-base)]": filter() === item.id,
                     "text-[var(--v2-text-text-muted)] hover:bg-[var(--v2-overlay-simple-overlay-hover)] hover:text-[var(--v2-text-text-base)]": filter() !== item.id,
@@ -348,6 +423,84 @@ export const RequirementList: Component<{
                 </button>
               )}
             </For>
+          </div>
+        </div>
+      </Show>
+
+      <Show when={showCreate()}>
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4">
+          <div class="w-full max-w-[680px] rounded-[8px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-base)] p-5 shadow-xl">
+            <div class="mb-4 flex items-center justify-between gap-3">
+              <h2 class="text-[15px] font-[530] text-[var(--v2-text-text-base)]">新增需求</h2>
+              <button
+                type="button"
+                class="rounded-[5px] p-1 text-[var(--v2-text-text-muted)] transition-colors hover:bg-[var(--v2-overlay-simple-overlay-hover)] hover:text-[var(--v2-text-text-base)]"
+                onClick={closeCreateForm}
+                aria-label="关闭"
+              >
+                <Icon name="close" size="small" />
+              </button>
+            </div>
+            <div class="flex flex-col gap-3">
+              <label class="flex flex-col gap-1.5">
+                <span class="text-[12px] font-[530] text-[var(--v2-text-text-muted)]">标题</span>
+                <input
+                  value={newTitle()}
+                  onInput={(event) => setNewTitle(event.currentTarget.value)}
+                  class="h-8 rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-2.5 text-[13px] text-[var(--v2-text-text-base)] outline-none focus:border-[var(--v2-blue-400)]"
+                  placeholder="输入需求标题"
+                />
+              </label>
+              <label class="flex flex-col gap-1.5">
+                <span class="text-[12px] font-[530] text-[var(--v2-text-text-muted)]">需求内容</span>
+                <textarea
+                  value={newDescription()}
+                  onInput={(event) => setNewDescription(event.currentTarget.value)}
+                  class="min-h-[240px] resize-y rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-2.5 py-2 text-[13px] leading-5 text-[var(--v2-text-text-base)] outline-none focus:border-[var(--v2-blue-400)]"
+                  placeholder="描述用户目标、功能范围和验收标准"
+                />
+              </label>
+              <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <label class="flex flex-col gap-1.5">
+                  <span class="text-[12px] font-[530] text-[var(--v2-text-text-muted)]">优先级</span>
+                  <select
+                    value={newPriority()}
+                    onChange={(event) => setNewPriority(event.currentTarget.value as RequirementItem["priority"])}
+                    class="h-8 rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-2.5 text-[13px] text-[var(--v2-text-text-base)] outline-none focus:border-[var(--v2-blue-400)]"
+                  >
+                    <option value="high">高</option>
+                    <option value="medium">中</option>
+                    <option value="low">低</option>
+                  </select>
+                </label>
+                <label class="flex flex-col gap-1.5">
+                  <span class="text-[12px] font-[530] text-[var(--v2-text-text-muted)]">分配人</span>
+                  <input
+                    value={newAssignee()}
+                    onInput={(event) => setNewAssignee(event.currentTarget.value)}
+                    class="h-8 rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-2.5 text-[13px] text-[var(--v2-text-text-base)] outline-none focus:border-[var(--v2-blue-400)]"
+                    placeholder="可选"
+                  />
+                </label>
+                <label class="flex flex-col gap-1.5">
+                  <span class="text-[12px] font-[530] text-[var(--v2-text-text-muted)]">实现人</span>
+                  <input
+                    value={newImplementer()}
+                    onInput={(event) => setNewImplementer(event.currentTarget.value)}
+                    class="h-8 rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-2.5 text-[13px] text-[var(--v2-text-text-base)] outline-none focus:border-[var(--v2-blue-400)]"
+                    placeholder="可选"
+                  />
+                </label>
+              </div>
+            </div>
+            <div class="mt-4 flex justify-end gap-2">
+              <ButtonV2 size="small" variant="ghost" onClick={closeCreateForm}>
+                取消
+              </ButtonV2>
+              <ButtonV2 size="small" disabled={!canCreateRequirement() || creatingRequirement()} onClick={handleCreateRequirement}>
+                {creatingRequirement() ? "新增中..." : "新增"}
+              </ButtonV2>
+            </div>
           </div>
         </div>
       </Show>

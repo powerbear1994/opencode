@@ -637,8 +637,8 @@ async function streamResponse(
           controller.enqueue(encoder.encode(sse({ error: { message: "company-txt upstream failed" } })))
           continue
         }
-        const content = stringOption(event.data.content)
-        if (!content) continue
+        const content = contentOption(event.data.content)
+        if (content === undefined) continue
         if (event.event === "message") {
           state.messageContent = content
           continue
@@ -720,8 +720,8 @@ async function streamLiveDelta(
       controller.enqueue(input.encoder.encode(sse({ error: { message: "company-txt upstream failed" } })))
       continue
     }
-    const content = stringOption(event.data.content)
-    if (!content) continue
+    const content = contentOption(event.data.content)
+    if (content === undefined) continue
     if (event.event === "message") {
       state.messageContent = content
       continue
@@ -787,8 +787,8 @@ async function collectCompletion(
   const chunks: string[] = []
   let messageContent: string | undefined
   for await (const event of iterateCompanyEvents(body)) {
-    const content = stringOption(event.data.content)
-    if (!content) continue
+    const content = contentOption(event.data.content)
+    if (content === undefined) continue
     if (event.event === "message") {
       messageContent = content
       continue
@@ -865,7 +865,7 @@ function outputParser(model: Model): (raw: string) => ParsedOutput {
 
 function parseQwenOutput(raw: string): ParsedOutput {
   const matches = [...raw.matchAll(/<tool_call>\s*(?<body>.*?)\s*<\/tool_call>/gs)]
-  if (!matches.length) return { type: "final", content: raw.trim() }
+  if (!matches.length) return { type: "final", content: raw }
   return {
     type: "tool_calls",
     content: toolCallContent(raw.replace(/<tool_call>\s*.*?\s*<\/tool_call>/gs, "")),
@@ -896,7 +896,7 @@ function parseKimiOutput(raw: string): ParsedOutput {
       /<\|tool_call_begin\|>\s*(?<id>[\w.:-]+)\s*<\|tool_call_argument_begin\|>\s*(?<args>.*?)\s*<\|tool_call_end\|>/gs,
     ),
   ]
-  if (!matches.length) return { type: "final", content: raw.trim() }
+  if (!matches.length) return { type: "final", content: raw }
   return {
     type: "tool_calls",
     content: toolCallContent(raw.replace(/<\|tool_calls_section_begin\|>.*?<\|tool_calls_section_end\|>/gs, "")),
@@ -920,7 +920,7 @@ function parseMiniMaxOutput(raw: string): ParsedOutput {
       minimaxInvoke(match.groups?.body ?? ""),
   )
   const bodies = [...matches, ...partialMatches].map((match) => match.groups?.body ?? "")
-  if (!bodies.length) return { type: "final", content: raw.trim() }
+  if (!bodies.length) return { type: "final", content: raw }
   return {
     type: "tool_calls",
     content: toolCallContent(
@@ -1941,6 +1941,10 @@ function parseJson<T>(input: string, fallback: T): T {
 
 function stringOption(input: unknown) {
   return typeof input === "string" && input.trim() ? input.trim() : undefined
+}
+
+function contentOption(input: unknown) {
+  return typeof input === "string" ? input : undefined
 }
 
 function numberOption(input: unknown) {

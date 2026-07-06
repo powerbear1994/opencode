@@ -1,70 +1,78 @@
 import { createStore, reconcile, type SetStoreFunction } from "solid-js/store"
+import { useServer } from "@/context/server"
+import type { ServerConnection } from "@/context/server"
+import {
+  loadRequirementWorkflowRecords,
+  normalizeWorkflow,
+  updateRequirementWorkflow,
+  type RequirementWorkflowRecord,
+} from "./requirementProjectStore"
 
-const STORAGE_KEY = "opencode.requirement.workflow.records"
-
-export interface RequirementWorkflowRecord {
-  projectId: string
-  requirementId: string
-  lockedAt?: string
-  designGeneratedAt?: string
-  designLockedAt?: string
-  developmentGeneratedAt?: string
-  developmentLockedAt?: string
-  testGeneratedAt?: string
-  testLockedAt?: string
-}
-
-function normalize(raw: unknown): RequirementWorkflowRecord {
-  const record = typeof raw === "object" && raw !== null ? raw as Partial<RequirementWorkflowRecord> : {}
-  return {
-    projectId: record.projectId ?? "",
-    requirementId: record.requirementId ?? "",
-    lockedAt: record.lockedAt,
-    designGeneratedAt: record.designGeneratedAt,
-    designLockedAt: record.designLockedAt,
-    developmentGeneratedAt: record.developmentGeneratedAt,
-    developmentLockedAt: record.developmentLockedAt,
-    testGeneratedAt: record.testGeneratedAt,
-    testLockedAt: record.testLockedAt,
-  }
-}
-
-function loadRecords(): RequirementWorkflowRecord[] {
-  if (typeof window === "undefined") return []
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    return parsed.map(normalize)
-  } catch {
-    return []
-  }
-}
-
-function saveRecords(records: RequirementWorkflowRecord[]) {
-  if (typeof window === "undefined") return
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(records))
-  } catch {}
-}
+export type { RequirementWorkflowRecord }
 
 let store: RequirementWorkflowRecord[] | undefined
 let setStore: SetStoreFunction<RequirementWorkflowRecord[]> | undefined
+const loadingProjects = new Set<string>()
+const loadedProjects = new Set<string>()
 
 function ensureStore() {
   if (!store || !setStore) {
-    const [s, ss] = createStore<RequirementWorkflowRecord[]>(loadRecords())
+    const [s, ss] = createStore<RequirementWorkflowRecord[]>([])
     store = s
     setStore = ss
   }
   return { records: store as RequirementWorkflowRecord[], setRecords: setStore }
 }
 
+function ensureProject(projectId: string, server?: ServerConnection.Any) {
+  if (!projectId || loadingProjects.has(projectId) || loadedProjects.has(projectId)) return
+  loadingProjects.add(projectId)
+  void loadRequirementWorkflowRecords({ server, project: projectId })
+    .then((records) => {
+      const { records: current, setRecords } = ensureStore()
+      const currentProjectRecords = current.filter((record) => record.projectId === projectId)
+      const currentKeys = new Set(currentProjectRecords.map((record) => `${record.projectId}\u0000${record.requirementId}`))
+      const next = [
+        ...current.filter((record) => record.projectId !== projectId),
+        ...currentProjectRecords,
+        ...records.filter((record) => !currentKeys.has(`${record.projectId}\u0000${record.requirementId}`)),
+      ]
+      setRecords(reconcile(next))
+      loadedProjects.add(projectId)
+    })
+    .finally(() => loadingProjects.delete(projectId))
+}
+
+function saveRecord(record: RequirementWorkflowRecord, server?: ServerConnection.Any) {
+  void updateRequirementWorkflow({
+    server,
+    project: record.projectId,
+    requirementId: record.requirementId,
+    update: () => record,
+  })
+}
+
+function updateRecord(
+  records: RequirementWorkflowRecord[],
+  projectId: string,
+  requirementId: string,
+  update: (record: RequirementWorkflowRecord) => RequirementWorkflowRecord,
+) {
+  const index = records.findIndex((record) => record.projectId === projectId && record.requirementId === requirementId)
+  const base = index >= 0 ? records[index] : normalizeWorkflow(undefined, projectId, requirementId)
+  const record = update(base)
+  const next = index >= 0
+    ? records.map((item, i) => i === index ? record : item)
+    : [...records, record]
+  return { next, record }
+}
+
 export function useRequirementWorkflow() {
+  const server = useServer()
   const { records, setRecords } = ensureStore()
 
   function getRecord(projectId: string, requirementId: string) {
+    ensureProject(projectId, server.current)
     return records.find((record) => record.projectId === projectId && record.requirementId === requirementId)
   }
 
@@ -84,166 +92,94 @@ export function useRequirementWorkflow() {
     return !!getRecord(projectId, requirementId)?.testLockedAt
   }
 
+  function mutate(projectId: string, requirementId: string, update: (record: RequirementWorkflowRecord) => RequirementWorkflowRecord) {
+    if (!projectId || !requirementId) return
+    const result = updateRecord(records, projectId, requirementId, update)
+    setRecords(reconcile(result.next))
+    saveRecord(result.record, server.current)
+  }
+
   function lockRequirement(projectId: string, requirementId: string) {
     const now = new Date().toISOString()
-    const index = records.findIndex((record) => record.projectId === projectId && record.requirementId === requirementId)
-    const next =
-      index >= 0
-        ? records.map((record, i) =>
-            i === index ? { ...record, lockedAt: record.lockedAt ?? now } : record,
-          )
-        : [...records, { projectId, requirementId, lockedAt: now }]
-    setRecords(reconcile(next))
-    saveRecords(next)
+    mutate(projectId, requirementId, (record) => ({ ...record, lockedAt: record.lockedAt ?? now }))
   }
 
   function unlockRequirement(projectId: string, requirementId: string) {
-    const index = records.findIndex((record) => record.projectId === projectId && record.requirementId === requirementId)
-    if (index < 0) return
-    const next = records.map((record, i) =>
-      i === index
-        ? {
-            ...record,
-            lockedAt: undefined,
-            designGeneratedAt: undefined,
-            designLockedAt: undefined,
-            developmentGeneratedAt: undefined,
-            developmentLockedAt: undefined,
-            testGeneratedAt: undefined,
-            testLockedAt: undefined,
-          }
-        : record,
-    )
-    setRecords(reconcile(next))
-    saveRecords(next)
+    mutate(projectId, requirementId, (record) => ({
+      ...record,
+      lockedAt: undefined,
+      designGeneratedAt: undefined,
+      designLockedAt: undefined,
+      developmentGeneratedAt: undefined,
+      developmentLockedAt: undefined,
+      testGeneratedAt: undefined,
+      testLockedAt: undefined,
+    }))
   }
 
   function markDesignGenerated(projectId: string, requirementId: string) {
     const now = new Date().toISOString()
-    const index = records.findIndex((record) => record.projectId === projectId && record.requirementId === requirementId)
-    const next =
-      index >= 0
-        ? records.map((record, i) =>
-            i === index ? { ...record, designGeneratedAt: record.designGeneratedAt ?? now } : record,
-          )
-        : [...records, { projectId, requirementId, designGeneratedAt: now }]
-    setRecords(reconcile(next))
-    saveRecords(next)
+    mutate(projectId, requirementId, (record) => ({ ...record, designGeneratedAt: record.designGeneratedAt ?? now }))
   }
 
   function lockDesign(projectId: string, requirementId: string) {
     const now = new Date().toISOString()
-    const index = records.findIndex((record) => record.projectId === projectId && record.requirementId === requirementId)
-    const next =
-      index >= 0
-        ? records.map((record, i) =>
-            i === index
-              ? { ...record, designGeneratedAt: record.designGeneratedAt ?? now, designLockedAt: record.designLockedAt ?? now }
-              : record,
-          )
-        : [...records, { projectId, requirementId, designGeneratedAt: now, designLockedAt: now }]
-    setRecords(reconcile(next))
-    saveRecords(next)
+    mutate(projectId, requirementId, (record) => ({
+      ...record,
+      designGeneratedAt: record.designGeneratedAt ?? now,
+      designLockedAt: record.designLockedAt ?? now,
+    }))
   }
 
   function unlockDesign(projectId: string, requirementId: string) {
-    const index = records.findIndex((record) => record.projectId === projectId && record.requirementId === requirementId)
-    if (index < 0) return
-    const next = records.map((record, i) =>
-      i === index
-        ? {
-            ...record,
-            designLockedAt: undefined,
-            developmentGeneratedAt: undefined,
-            developmentLockedAt: undefined,
-            testGeneratedAt: undefined,
-            testLockedAt: undefined,
-          }
-        : record,
-    )
-    setRecords(reconcile(next))
-    saveRecords(next)
+    mutate(projectId, requirementId, (record) => ({
+      ...record,
+      designLockedAt: undefined,
+      developmentGeneratedAt: undefined,
+      developmentLockedAt: undefined,
+      testGeneratedAt: undefined,
+      testLockedAt: undefined,
+    }))
   }
 
   function markDevelopmentGenerated(projectId: string, requirementId: string) {
     const now = new Date().toISOString()
-    const index = records.findIndex((record) => record.projectId === projectId && record.requirementId === requirementId)
-    const next =
-      index >= 0
-        ? records.map((record, i) =>
-            i === index ? { ...record, developmentGeneratedAt: record.developmentGeneratedAt ?? now } : record,
-          )
-        : [...records, { projectId, requirementId, developmentGeneratedAt: now }]
-    setRecords(reconcile(next))
-    saveRecords(next)
+    mutate(projectId, requirementId, (record) => ({
+      ...record,
+      developmentGeneratedAt: record.developmentGeneratedAt ?? now,
+    }))
   }
 
   function lockDevelopment(projectId: string, requirementId: string) {
     const now = new Date().toISOString()
-    const index = records.findIndex((record) => record.projectId === projectId && record.requirementId === requirementId)
-    const next =
-      index >= 0
-        ? records.map((record, i) =>
-            i === index
-              ? {
-                  ...record,
-                  developmentGeneratedAt: record.developmentGeneratedAt ?? now,
-                  developmentLockedAt: record.developmentLockedAt ?? now,
-                }
-              : record,
-          )
-        : [...records, { projectId, requirementId, developmentGeneratedAt: now, developmentLockedAt: now }]
-    setRecords(reconcile(next))
-    saveRecords(next)
+    mutate(projectId, requirementId, (record) => ({
+      ...record,
+      developmentGeneratedAt: record.developmentGeneratedAt ?? now,
+      developmentLockedAt: record.developmentLockedAt ?? now,
+    }))
   }
 
   function unlockDevelopment(projectId: string, requirementId: string) {
-    const index = records.findIndex((record) => record.projectId === projectId && record.requirementId === requirementId)
-    if (index < 0) return
-    const next = records.map((record, i) =>
-      i === index
-        ? {
-            ...record,
-            developmentLockedAt: undefined,
-            testGeneratedAt: undefined,
-            testLockedAt: undefined,
-          }
-        : record,
-    )
-    setRecords(reconcile(next))
-    saveRecords(next)
+    mutate(projectId, requirementId, (record) => ({
+      ...record,
+      developmentLockedAt: undefined,
+      testGeneratedAt: undefined,
+      testLockedAt: undefined,
+    }))
   }
 
   function markTestGenerated(projectId: string, requirementId: string) {
     const now = new Date().toISOString()
-    const index = records.findIndex((record) => record.projectId === projectId && record.requirementId === requirementId)
-    const next =
-      index >= 0
-        ? records.map((record, i) =>
-            i === index ? { ...record, testGeneratedAt: record.testGeneratedAt ?? now } : record,
-          )
-        : [...records, { projectId, requirementId, testGeneratedAt: now }]
-    setRecords(reconcile(next))
-    saveRecords(next)
+    mutate(projectId, requirementId, (record) => ({ ...record, testGeneratedAt: record.testGeneratedAt ?? now }))
   }
 
   function lockTest(projectId: string, requirementId: string) {
     const now = new Date().toISOString()
-    const index = records.findIndex((record) => record.projectId === projectId && record.requirementId === requirementId)
-    const next =
-      index >= 0
-        ? records.map((record, i) =>
-            i === index
-              ? {
-                  ...record,
-                  testGeneratedAt: record.testGeneratedAt ?? now,
-                  testLockedAt: record.testLockedAt ?? now,
-                }
-              : record,
-          )
-        : [...records, { projectId, requirementId, testGeneratedAt: now, testLockedAt: now }]
-    setRecords(reconcile(next))
-    saveRecords(next)
+    mutate(projectId, requirementId, (record) => ({
+      ...record,
+      testGeneratedAt: record.testGeneratedAt ?? now,
+      testLockedAt: record.testLockedAt ?? now,
+    }))
   }
 
   return {

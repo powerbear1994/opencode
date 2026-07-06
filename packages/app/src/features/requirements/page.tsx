@@ -23,7 +23,7 @@ const RequirementsContent: Component = () => {
     ),
   )
 
-  // Support navigating from chat session card with ?selectedId=REQ-001
+  // Support navigating from chat session card with ?selectedId=<requirement-id>
   createEffect(() => {
     const id = searchParams.selectedId
     setSelectedId(projectDir() ? (id ?? null) : null)

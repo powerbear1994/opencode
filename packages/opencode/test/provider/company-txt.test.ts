@@ -68,6 +68,110 @@ describe("company-txt provider", () => {
     }
   })
 
+  test("preserves markdown newlines in non-streaming text output", async () => {
+    const markdown = "# 标题\n\n- 第一项\n- 第二项\n\n```ts\nconst ok = true\n```\n"
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-markdown" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          return new Response(
+            [
+              "event: chunk",
+              `data: ${JSON.stringify({ content: markdown.slice(0, 5) })}`,
+              "",
+              "event: chunk",
+              `data: ${JSON.stringify({ content: markdown.slice(5, 13) })}`,
+              "",
+              "event: chunk",
+              `data: ${JSON.stringify({ content: markdown.slice(13) })}`,
+              "",
+            ].join("\n"),
+            { headers: { "content-type": "text/event-stream" } },
+          )
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      const response = await createCompanyTxtFetch(provider(server.url.origin))(
+        "http://company-txt.local/v1/chat/completions",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "qwen3-coder",
+            messages: [{ role: "user", content: "return markdown" }],
+          }),
+        },
+      )
+      const body = (await response.json()) as {
+        choices: Array<{ message: { content?: string } }>
+      }
+
+      expect(body.choices[0]?.message.content).toBe(markdown)
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+  test("preserves markdown newlines in streaming text output", async () => {
+    const chunks = ["# 标题\n", "\n", "- 第一项\n", "- 第二项\n"]
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-stream-markdown" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          return new Response(
+            chunks
+              .flatMap((content) => ["event: chunk", `data: ${JSON.stringify({ content })}`, ""])
+              .join("\n"),
+            { headers: { "content-type": "text/event-stream" } },
+          )
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      const response = await createCompanyTxtFetch(provider(server.url.origin))(
+        "http://company-txt.local/v1/chat/completions",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "qwen3-coder",
+            stream: true,
+            messages: [{ role: "user", content: "return markdown" }],
+          }),
+        },
+      )
+      const body = await response.text()
+      const content = body
+        .split("\n\n")
+        .flatMap((block) => {
+          const line = block.split("\n").find((item) => item.startsWith("data: "))
+          if (!line || line === "data: [DONE]") return []
+          const parsed = JSON.parse(line.slice("data: ".length)) as {
+            choices?: Array<{ delta?: { content?: string } }>
+          }
+          return parsed.choices?.[0]?.delta?.content ?? []
+        })
+        .join("")
+
+      expect(content).toBe(chunks.join(""))
+    } finally {
+      await server.stop(true)
+    }
+  })
+
   test("keeps package.json content as a string for write tool calls", async () => {
     const server = Bun.serve({
       port: 0,

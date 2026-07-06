@@ -1,149 +1,16 @@
 import { createStore, reconcile, type SetStoreFunction } from "solid-js/store"
-import type { LinkStatus, RequirementSessionLink, RequirementSendMode } from "../types"
+import { useServer } from "@/context/server"
+import type { ServerConnection } from "@/context/server"
 import { uuid } from "@/utils/uuid"
+import type { LinkStatus, RequirementSessionLink, RequirementSendMode } from "../types"
+import {
+  loadRequirementLinks,
+  normalizeLink,
+  uniqueLinks,
+  updateRequirementLinks,
+} from "./requirementProjectStore"
 
-// ── Constants ────────────────────────────────────────────────────────────────
-
-const STORAGE_KEY = "opencode.requirement.session.links"
 const PENDING_LINK_KEY = "opencode.requirement.pending.link"
-
-// ── Migration from old execution records ─────────────────────────────────────
-
-const OLD_STORAGE_KEY = "opencode.requirement.execution.records"
-
-function migrateOldRecords(): RequirementSessionLink[] | null {
-  if (typeof window === "undefined") return null
-  try {
-    const raw = window.localStorage.getItem(OLD_STORAGE_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed) || parsed.length === 0) return null
-
-    const links: RequirementSessionLink[] = []
-    for (const old of parsed) {
-      if (!old.sessionId || !old.projectId) continue
-      links.push({
-        id: uuid(),
-        projectId: old.projectId ?? "",
-        projectPath: old.projectPath,
-        requirementId: old.requirementId ?? "",
-        requirementTitle: old.requirementTitle ?? "",
-        sessionId: old.sessionId,
-        sessionTitle: old.sessionTitle ?? "",
-        sourceMode: old.sourceMode ?? "raw",
-        status: migrateStatus(old.status ?? "not_started"),
-        isPrimary: true,
-        content: old.content ?? old.prompt ?? "",
-        createdAt: old.createdAt ?? new Date().toISOString(),
-        updatedAt: old.updatedAt ?? new Date().toISOString(),
-        startedAt: old.startedAt,
-        completedAt: old.completedAt,
-      })
-    }
-    // Remove old records after migration
-    window.localStorage.removeItem(OLD_STORAGE_KEY)
-    return links
-  } catch {
-    return null
-  }
-}
-
-function migrateStatus(old: string): LinkStatus {
-  const map: Record<string, LinkStatus> = {
-    not_started: "not_started",
-    prompt_created: "not_started",
-    prompt_generated: "not_started",
-    filled_to_chat: "filled_to_session",
-    raw_filled_to_session: "filled_to_session",
-    prompt_filled_to_session: "filled_to_session",
-    session_created: "session_created",
-    raw_session_created: "session_created",
-    prompt_session_created: "session_created",
-    implementing: "implementing",
-    waiting_review: "waiting_review",
-    done: "done",
-    failed: "failed",
-  }
-  return map[old] ?? "not_started"
-}
-
-// ── Normalization ─────────────────────────────────────────────────────────────
-
-type StoredRequirementSessionLink = Partial<RequirementSessionLink> & {
-  sourceMode?: RequirementSendMode
-  status?: LinkStatus
-}
-
-function normalize(raw: unknown): RequirementSessionLink {
-  const link = typeof raw === "object" && raw !== null ? raw as StoredRequirementSessionLink : {}
-  return {
-    id: link.id ?? uuid(),
-    projectId: link.projectId ?? "",
-    projectName: link.projectName,
-    projectPath: link.projectPath,
-    requirementId: link.requirementId ?? "",
-    requirementTitle: link.requirementTitle ?? "",
-    sessionId: link.sessionId ?? "",
-    sessionTitle: link.sessionTitle ?? "",
-    sessionDirectory: link.sessionDirectory,
-    sourceMode: link.sourceMode ?? "raw",
-    status: link.status ?? "not_started",
-    isPrimary: link.isPrimary,
-    content: link.content,
-    createdAt: link.createdAt ?? new Date().toISOString(),
-    updatedAt: link.updatedAt ?? new Date().toISOString(),
-    startedAt: link.startedAt,
-    completedAt: link.completedAt,
-  }
-}
-
-function uniqueLinks(links: RequirementSessionLink[]) {
-  const seen = new Set<string>()
-  return links.filter((link) => {
-    const key = `${link.projectId}\u0000${link.requirementId}\u0000${link.sessionId}\u0000${link.sourceMode}`
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
-}
-
-function loadLinks(): RequirementSessionLink[] {
-  if (typeof window === "undefined") return []
-  try {
-    // Try migration first
-    const migrated = migrateOldRecords()
-    if (migrated) return uniqueLinks(migrated)
-
-    const raw = window.localStorage.getItem(STORAGE_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    return uniqueLinks(parsed.map(normalize))
-  } catch {
-    return []
-  }
-}
-
-function saveLinks(links: RequirementSessionLink[]): void {
-  if (typeof window === "undefined") return
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(links))
-  } catch {}
-}
-
-function sameLink(
-  a: Pick<RequirementSessionLink, "projectId" | "requirementId" | "sessionId" | "sourceMode">,
-  b: Pick<RequirementSessionLink, "projectId" | "requirementId" | "sessionId" | "sourceMode">,
-) {
-  return (
-    a.projectId === b.projectId &&
-    a.requirementId === b.requirementId &&
-    a.sessionId === b.sessionId &&
-    a.sourceMode === b.sourceMode
-  )
-}
-
-// ── Pending Link (for new sessions not yet created) ─────────────────────────
 
 export interface PendingRequirementLink {
   projectId: string
@@ -155,8 +22,6 @@ export interface PendingRequirementLink {
   createdAt: string
 }
 
-/** Store a pending requirement link before navigating to create a new session.
- *  Uses sessionStorage so it survives SPA navigation but not tab close. */
 export function storePendingRequirementLink(
   info: Omit<PendingRequirementLink, "createdAt">,
 ): void {
@@ -166,11 +31,9 @@ export function storePendingRequirementLink(
       PENDING_LINK_KEY,
       JSON.stringify({ ...info, createdAt: new Date().toISOString() }),
     )
-  } catch { /* ignore */ }
+  } catch {}
 }
 
-/** Consume (read + remove) a pending requirement link for a given project.
- *  Returns null if no pending link exists or projectId doesn't match. */
 export function consumePendingRequirementLink(
   projectId: string,
 ): PendingRequirementLink | null {
@@ -187,187 +50,185 @@ export function consumePendingRequirementLink(
   }
 }
 
-// ── Singleton Store ──────────────────────────────────────────────────────────
-
 let store: RequirementSessionLink[] | undefined
 let setStore: SetStoreFunction<RequirementSessionLink[]> | undefined
+const loadingProjects = new Set<string>()
+const loadedProjects = new Set<string>()
 
 function ensureStore() {
   if (!store || !setStore) {
-    const [s, ss] = createStore<RequirementSessionLink[]>(loadLinks())
+    const [s, ss] = createStore<RequirementSessionLink[]>([])
     store = s
     setStore = ss
   }
   return { links: store as RequirementSessionLink[], setLinks: setStore! }
 }
 
-/**
- * Create a requirement-session link directly, outside of a SolidJS component.
- * Used by the session submission flow where hooks aren't available.
- * Writes through the reactive store if initialized, otherwise falls back to
- * localStorage-only (the store will pick it up on next init).
- */
+function ensureProject(projectId: string, server?: ServerConnection.Any) {
+  if (!projectId || loadingProjects.has(projectId) || loadedProjects.has(projectId)) return
+  loadingProjects.add(projectId)
+  void loadRequirementLinks({ server, project: projectId })
+    .then((links) => {
+      const current = ensureStore()
+      const currentProjectLinks = current.links.filter((link) => link.projectId === projectId)
+      const currentKeys = new Set(
+        currentProjectLinks.map((link) =>
+          `${link.projectId}\u0000${link.requirementId}\u0000${link.sessionId}\u0000${link.sourceMode}`,
+        ),
+      )
+      current.setLinks(reconcile([
+        ...current.links.filter((link) => link.projectId !== projectId),
+        ...currentProjectLinks,
+        ...links.filter((link) =>
+          !currentKeys.has(`${link.projectId}\u0000${link.requirementId}\u0000${link.sessionId}\u0000${link.sourceMode}`),
+        ),
+      ]))
+      loadedProjects.add(projectId)
+    })
+    .finally(() => loadingProjects.delete(projectId))
+}
+
+function sameLink(
+  a: Pick<RequirementSessionLink, "projectId" | "requirementId" | "sessionId" | "sourceMode">,
+  b: Pick<RequirementSessionLink, "projectId" | "requirementId" | "sessionId" | "sourceMode">,
+) {
+  return (
+    a.projectId === b.projectId &&
+    a.requirementId === b.requirementId &&
+    a.sessionId === b.sessionId &&
+    a.sourceMode === b.sourceMode
+  )
+}
+
+function saveRequirementLinkSet(
+  projectId: string,
+  requirementId: string,
+  links: RequirementSessionLink[],
+  server?: ServerConnection.Any,
+) {
+  void updateRequirementLinks({
+    server,
+    project: projectId,
+    requirementId,
+    update: () => links.filter((link) => link.projectId === projectId && link.requirementId === requirementId),
+  })
+}
+
+function saveRequirementLinkAppend(link: RequirementSessionLink, server?: ServerConnection.Any) {
+  void updateRequirementLinks({
+    server,
+    project: link.projectId,
+    requirementId: link.requirementId,
+    update: (links) => uniqueLinks([...links, link]),
+  })
+}
+
+function appendLink(currentLinks: RequirementSessionLink[], link: Omit<RequirementSessionLink, "id" | "createdAt" | "updatedAt">) {
+  const duplicate = currentLinks.find((item) => sameLink(item, link))
+  if (duplicate) return { links: currentLinks, link: duplicate }
+
+  const now = new Date().toISOString()
+  const existing = currentLinks.filter(
+    (item) => item.projectId === link.projectId && item.requirementId === link.requirementId,
+  )
+  const nextLink = normalizeLink({
+    ...link,
+    id: uuid(),
+    isPrimary: link.isPrimary ?? existing.length === 0,
+    createdAt: now,
+    updatedAt: now,
+  })
+  return { links: uniqueLinks([...currentLinks, nextLink]), link: nextLink }
+}
+
 export function createRequirementLinkDirect(
   link: Omit<RequirementSessionLink, "id" | "createdAt" | "updatedAt">,
 ): RequirementSessionLink {
-  const now = new Date().toISOString()
-
-  // If the reactive store is initialized, use it (keeps UI reactive)
-  if (setStore) {
-    const duplicate = store!.find((item) => sameLink(item, link))
-    if (duplicate) return duplicate
-
-    const existing = store!.filter(
-      (l) => l.projectId === link.projectId && l.requirementId === link.requirementId,
-    )
-    const isFirst = existing.length === 0
-
-    const newLink: RequirementSessionLink = {
-      ...link,
-      id: uuid(),
-      isPrimary: link.isPrimary ?? isFirst,
-      createdAt: now,
-      updatedAt: now,
-    }
-
-    setStore(store!.length, newLink)
-    saveLinks([...store!])
-    return newLink
-  }
-
-  // Fallback: write directly to localStorage (reactive store not yet initialized)
-  const links = loadLinks()
-  const duplicate = links.find((item) => sameLink(item, link))
-  if (duplicate) return duplicate
-
-  const existing = links.filter(
-    (l) => l.projectId === link.projectId && l.requirementId === link.requirementId,
-  )
-  const isFirst = existing.length === 0
-
-  const newLink: RequirementSessionLink = {
-    ...link,
-    id: uuid(),
-    isPrimary: link.isPrimary ?? isFirst,
-    createdAt: now,
-    updatedAt: now,
-  }
-
-  links.push(newLink)
-  saveLinks(links)
-  return newLink
+  const current = ensureStore()
+  const result = appendLink(current.links, link)
+  current.setLinks(reconcile(result.links))
+  saveRequirementLinkAppend(result.link)
+  return result.link
 }
 
-// ── Public Hook ──────────────────────────────────────────────────────────────
-
 export function useRequirementLinks() {
+  const server = useServer()
   const { links, setLinks } = ensureStore()
 
-  /** Get all links for a requirement within a project */
   function getLinksByRequirement(projectId: string, requirementId: string): RequirementSessionLink[] {
+    ensureProject(projectId, server.current)
     return links.filter(
-      (l) => l.projectId === projectId && l.requirementId === requirementId,
+      (link) => link.projectId === projectId && link.requirementId === requirementId,
     )
   }
 
-  /** Get all links for a session within a project */
   function getLinksBySession(projectId: string, sessionId: string): RequirementSessionLink[] {
+    ensureProject(projectId, server.current)
     return links.filter(
-      (l) => l.projectId === projectId && l.sessionId === sessionId,
+      (link) => link.projectId === projectId && link.sessionId === sessionId,
     )
   }
 
-  /** Get the primary (first) link for a requirement */
   function getPrimaryLink(projectId: string, requirementId: string): RequirementSessionLink | undefined {
-    return links.find(
-      (l) => l.projectId === projectId && l.requirementId === requirementId && l.isPrimary,
-    ) ?? links.find(
-      (l) => l.projectId === projectId && l.requirementId === requirementId,
-    )
+    return getLinksByRequirement(projectId, requirementId).find((link) => link.isPrimary) ??
+      getLinksByRequirement(projectId, requirementId)[0]
   }
 
-  /** Create a new link */
   function createLink(link: Omit<RequirementSessionLink, "id" | "createdAt" | "updatedAt">): RequirementSessionLink {
-    const now = new Date().toISOString()
-    // If this is the first link for the requirement, make it primary
-    const duplicate = links.find((item) => sameLink(item, link))
-    if (duplicate) return duplicate
-
-    const existing = getLinksByRequirement(link.projectId, link.requirementId)
-    const isFirst = existing.length === 0
-
-    const newLink: RequirementSessionLink = {
-      ...link,
-      id: uuid(),
-      isPrimary: link.isPrimary ?? isFirst,
-      createdAt: now,
-      updatedAt: now,
-    }
-
-    const next = [...links, newLink]
-    setLinks(links.length, newLink)
-    saveLinks(next)
-    return newLink
+    const result = appendLink(links, link)
+    setLinks(reconcile(result.links))
+    saveRequirementLinkAppend(result.link, server.current)
+    return result.link
   }
 
-  /** Remove a link */
   function removeLink(linkId: string): void {
-    const idx = links.findIndex((l) => l.id === linkId)
-    if (idx < 0) return
-    const removed = links[idx]
-    const next = links.filter((l) => l.id !== linkId)
-
-    // If this was the primary link, promote the next one
-    if (removed.isPrimary) {
-      const sibling = next.find(
-        (l) => l.projectId === removed.projectId && l.requirementId === removed.requirementId,
-      )
-      if (sibling) sibling.isPrimary = true
-    }
-
-    setLinks(reconcile(next))
-    saveLinks(next)
+    const removed = links.find((link) => link.id === linkId)
+    if (!removed) return
+    const next = links.filter((link) => link.id !== linkId)
+    const sibling = removed.isPrimary
+      ? next.find((link) => link.projectId === removed.projectId && link.requirementId === removed.requirementId)
+      : undefined
+    const promoted = sibling
+      ? next.map((link) => link.id === sibling.id ? { ...link, isPrimary: true } : link)
+      : next
+    setLinks(reconcile(promoted))
+    saveRequirementLinkSet(removed.projectId, removed.requirementId, promoted, server.current)
   }
 
-  /**
-   * Remove all links between a requirement and a session (scoped to project).
-   * Does NOT delete the real session or its messages.
-   */
   function unlinkRequirementFromSession(projectId: string, requirementId: string, sessionId: string): void {
+    const removed = links.find(
+      (link) => link.projectId === projectId && link.requirementId === requirementId && link.sessionId === sessionId,
+    )
     const next = links.filter(
-      (l) => !(l.projectId === projectId && l.requirementId === requirementId && l.sessionId === sessionId),
+      (link) => !(link.projectId === projectId && link.requirementId === requirementId && link.sessionId === sessionId),
     )
     if (next.length === links.length) return
-
-    // If the removed link was primary, promote another
-    const removed = links.find(
-      (l) => l.projectId === projectId && l.requirementId === requirementId && l.sessionId === sessionId,
-    )
-    if (removed?.isPrimary) {
-      const sibling = next.find(
-        (l) => l.projectId === projectId && l.requirementId === requirementId,
-      )
-      if (sibling) sibling.isPrimary = true
-    }
-
-    setLinks(reconcile(next))
-    saveLinks(next)
+    const sibling = removed?.isPrimary
+      ? next.find((link) => link.projectId === projectId && link.requirementId === requirementId)
+      : undefined
+    const promoted = sibling
+      ? next.map((link) => link.id === sibling.id ? { ...link, isPrimary: true } : link)
+      : next
+    setLinks(reconcile(promoted))
+    saveRequirementLinkSet(projectId, requirementId, promoted, server.current)
   }
 
-  /** Update link status */
   function updateLinkStatus(linkId: string, status: LinkStatus): void {
-    const idx = links.findIndex((l) => l.id === linkId)
-    if (idx < 0) return
+    const target = links.find((link) => link.id === linkId)
+    if (!target) return
     const now = new Date().toISOString()
-    setLinks(idx, "status", status)
-    setLinks(idx, "updatedAt", now)
-    if (status === "implementing" && !links[idx].startedAt) {
-      setLinks(idx, "startedAt", now)
-    }
-    if (status === "done") {
-      setLinks(idx, "completedAt", now)
-    }
-    saveLinks([...links])
+    const next = links.map((link) => {
+      if (link.id !== linkId) return link
+      return {
+        ...link,
+        status,
+        updatedAt: now,
+        startedAt: status === "implementing" ? link.startedAt ?? now : link.startedAt,
+        completedAt: status === "done" ? now : link.completedAt,
+      }
+    })
+    setLinks(reconcile(next))
+    saveRequirementLinkSet(target.projectId, target.requirementId, next, server.current)
   }
 
   return {

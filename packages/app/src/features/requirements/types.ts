@@ -14,12 +14,15 @@ export interface RequirementItem {
 
 /**
  * Provider abstraction for requirement data access.
- * First version uses MockRequirementProvider.
- * Future: replace with HttpRequirementProvider for real backend.
+ * Requirement data is stored in the selected project's .opencode directory.
  */
 export interface RequirementProvider {
   listRequirements(projectId: string): Promise<RequirementItem[]>
   getRequirementDetail(projectId: string, id: string): Promise<RequirementItem | undefined>
+  createRequirement(
+    projectId: string,
+    requirement: Pick<RequirementItem, "title" | "description" | "priority" | "assignee" | "implementer">,
+  ): Promise<RequirementItem>
 }
 
 export type RequirementSendMode = "raw" | "design" | "development" | "test"
