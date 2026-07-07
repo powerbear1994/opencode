@@ -339,11 +339,23 @@ function renderPrompt(request: ChatRequest, config: Record<string, unknown>) {
     "You are an AI assistant. Follow the messages in order.",
     "Do not output internal chat-template markers.",
   ]
+  const finalAnswerFormat = finalAnswerFormatInstruction(request, config)
+  if (finalAnswerFormat) sections.push(finalAnswerFormat)
   const renderedTools = renderTools(tools, config)
   if (renderedTools) sections.push(renderedTools)
   sections.push(renderMessages([...controlMessages(request, tools), ...(request.messages ?? [])], config))
   if (config.add_generation_prompt !== false) sections.push("assistant:")
   return sections.filter((section) => section.trim()).join("\n\n")
+}
+
+function finalAnswerFormatInstruction(request: ChatRequest, config: Record<string, unknown>) {
+  if (request.response_format) return
+  if (toolCallStyle(config) !== "minimax") return
+  return [
+    "# Final Answer Formatting",
+    "When producing a final natural-language answer, use readable Markdown with real newline characters.",
+    "Put headings, paragraphs, lists, tables, and fenced code blocks on separate lines; never collapse a Markdown answer into one paragraph with literal heading markers like ## embedded in prose.",
+  ].join("\n")
 }
 
 function renderMessages(messages: ChatMessage[], config: Record<string, unknown>) {
@@ -839,17 +851,15 @@ async function* iterateCompanyEvents(body: ReadableStream<Uint8Array>): AsyncGen
 }
 
 function parseCompanyEvent(block: string): CompanyStreamEvent {
-  const event = block
-    .split(/\n/)
+  const lines = block.split(/\n/).map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line))
+  const event = lines
     .find((line) => line.startsWith("event:"))
-    ?.replace(/^event:\s*/, "")
+    ?.replace(/^event: ?/, "")
     .trim()
-  const data = block
-    .split(/\n/)
+  const data = lines
     .filter((line) => line.startsWith("data:"))
-    .map((line) => line.replace(/^data:\s*/, ""))
+    .map((line) => line.replace(/^data: ?/, ""))
     .join("\n")
-    .trim()
   return { event: event || "message", data: parseJsonRecord(data) }
 }
 

@@ -3,6 +3,7 @@ import { useServer } from "@/context/server"
 import type { RequirementProvider } from "./types"
 import {
   createRequirement,
+  deleteRequirement,
   getRequirement,
   listRequirements,
 } from "./services/requirementProjectStore"
@@ -22,6 +23,10 @@ function createProjectFileProvider(): RequirementProvider {
 
     createRequirement(projectId, requirement) {
       return createRequirement({ server: server.current, project: projectId, requirement })
+    },
+
+    deleteRequirement(projectId, id) {
+      return deleteRequirement({ server: server.current, project: projectId, requirementId: id })
     },
   }
 }

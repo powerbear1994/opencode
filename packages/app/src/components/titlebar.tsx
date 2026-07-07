@@ -126,7 +126,7 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
   const hasProjects = createMemo(() => layout.projects.list().length > 0)
   const nav = createMemo(() => (useV2Titlebar() ? settings.general.showNavigation() : true))
   const workflowRoute = createMemo(() =>
-    ["/skills", "/agents", "/rules", "/requirements", "/design", "/development", "/test"].includes(location.pathname),
+    ["/skills", "/agents", "/rules", "/workbench"].includes(location.pathname),
   )
   const statusDirectory = createMemo(() => searchParams.project || decode64(params.dir))
   const skillsHref = createMemo(() => {
@@ -732,7 +732,7 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
                   aria-label="规则"
                   aria-current={location.pathname === "/rules" ? "page" : undefined}
                 >
-                  <Icon size="small" name="open-file" />
+                  <Icon size="small" name="sliders" />
                 </A>
               </Tooltip>
               <Show when={!location.pathname.includes("/session")}>
@@ -849,7 +849,7 @@ function TitlebarV2Right(props: { state: TitlebarV2RightState }) {
           size="large"
           class="!w-9 shrink-0"
           state={props.state.rules.active ? "pressed" : undefined}
-          icon={<IconV2 name="edit" />}
+          icon={<IconV2 name="outline-sliders" />}
           onClick={props.state.rules.onOpen}
           aria-label={props.state.rules.label}
           aria-current={props.state.rules.active ? "page" : undefined}

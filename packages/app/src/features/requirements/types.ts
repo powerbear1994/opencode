@@ -12,6 +12,13 @@ export interface RequirementItem {
   updatedAt: string
 }
 
+export interface RequirementSkillBindings {
+  requirement: string[]
+  design: string[]
+  development: string[]
+  test: string[]
+}
+
 /**
  * Provider abstraction for requirement data access.
  * Requirement data is stored in the selected project's .opencode directory.
@@ -23,6 +30,7 @@ export interface RequirementProvider {
     projectId: string,
     requirement: Pick<RequirementItem, "title" | "description" | "priority" | "assignee" | "implementer">,
   ): Promise<RequirementItem>
+  deleteRequirement(projectId: string, id: string): Promise<void>
 }
 
 export type RequirementSendMode = "raw" | "design" | "development" | "test"

@@ -56,24 +56,13 @@ import { legacySessionServer, requireServerKey, sessionHref } from "./utils/sess
 
 import { SessionPage, TargetSessionRoute as TargetSessionRouteContent } from "@/pages/session"
 import { NewHome, LegacyHome } from "@/pages/home"
+import { workflowSessionTitle } from "@/features/requirements/services/workflowNavigation"
 
-const RequirementsPage = lazy(() => import("@/features/requirements/page"))
-const DesignPage = lazy(() => import("@/features/design/page"))
-const DevelopmentPage = lazy(() => import("@/features/development/page"))
-const TestPage = lazy(() => import("@/features/test/page"))
+const WorkbenchPage = lazy(() => import("@/features/workbench/page"))
 const SkillsPage = lazy(() => import("@/features/skills/page"))
 const AgentsPage = lazy(() => import("@/features/agents/page"))
 const RulesPage = lazy(() => import("@/features/rules/page"))
 const NewSession = lazy(() => import("@/pages/new-session"))
-
-const workflowSessionTitle = (sourceMode: string | undefined) =>
-  sourceMode === "test"
-    ? "测试智能体会话"
-    : sourceMode === "development"
-      ? "开发智能体会话"
-      : sourceMode === "design"
-        ? "设计智能体会话"
-        : "需求智能体会话"
 
 function bindPendingRequirementSession(directory: string, sessionId: string) {
   void import("@/features/requirements/services/requirementLinkStore").then(
@@ -575,10 +564,7 @@ function Routes() {
         <Route path="/skills" component={SkillsPage} />
         <Route path="/agents" component={AgentsPage} />
         <Route path="/rules" component={RulesPage} />
-        <Route path="/requirements" component={RequirementsPage} />
-        <Route path="/design" component={DesignPage} />
-        <Route path="/development" component={DevelopmentPage} />
-        <Route path="/test" component={TestPage} />
+        <Route path="/workbench" component={WorkbenchPage} />
       </Route>
       <Route component={LegacyServerLayout}>
         <Show when={!settings.general.newLayoutDesigns()}>{<Route path="/" component={LegacyHome} />}</Show>

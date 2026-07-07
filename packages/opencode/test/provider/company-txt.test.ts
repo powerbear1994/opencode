@@ -172,6 +172,87 @@ describe("company-txt provider", () => {
     }
   })
 
+  test("preserves raw data payload boundary newlines", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-raw-markdown" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          return new Response(
+            ["event: chunk", "data: ", "data: ## 标题", "data: ", "data: 正文", "data: ", ""].join("\n"),
+            { headers: { "content-type": "text/event-stream" } },
+          )
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      const response = await createCompanyTxtFetch(provider(server.url.origin))(
+        "http://company-txt.local/v1/chat/completions",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "qwen3-coder",
+            messages: [{ role: "user", content: "return markdown" }],
+          }),
+        },
+      )
+      const body = (await response.json()) as {
+        choices: Array<{ message: { content?: string } }>
+      }
+
+      expect(body.choices[0]?.message.content).toBe("\n## 标题\n\n正文\n")
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+  test("prompts minimax final answers to preserve markdown structure", async () => {
+    let prompt = ""
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-minimax-markdown" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          const payload = (await request.json()) as { data?: { txt?: string } }
+          prompt = payload.data?.txt ?? ""
+          return new Response(["event: chunk", 'data: {"content":"done"}', ""].join("\n"), {
+            headers: { "content-type": "text/event-stream" },
+          })
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      await createCompanyTxtFetch(provider(server.url.origin, { adapter: "minimax" }))(
+        "http://company-txt.local/v1/chat/completions",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "qwen3-coder",
+            messages: [{ role: "user", content: "帮我分析一下这个项目" }],
+          }),
+        },
+      )
+
+      expect(prompt).toContain("# Final Answer Formatting")
+      expect(prompt).toContain("use readable Markdown with real newline characters")
+      expect(prompt).toContain("never collapse a Markdown answer into one paragraph")
+    } finally {
+      await server.stop(true)
+    }
+  })
+
   test("keeps package.json content as a string for write tool calls", async () => {
     const server = Bun.serve({
       port: 0,

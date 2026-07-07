@@ -32,14 +32,8 @@ export const SidebarContent = (props: {
   onOpenHelp: () => void
   logoutLabel: Accessor<string>
   onLogout: (() => void) | undefined
-  requirementsLabel: Accessor<string>
-  onOpenRequirements: () => void
-  designLabel: Accessor<string>
-  onOpenDesign: () => void
-  developmentLabel: Accessor<string>
-  onOpenDevelopment: () => void
-  testLabel: Accessor<string>
-  onOpenTest: () => void
+  workbenchLabel: Accessor<string>
+  onOpenWorkbench: () => void
   renderPanel: () => JSX.Element
 }): JSX.Element => {
   const expanded = createMemo(() => !!props.mobile || props.opened())
@@ -100,40 +94,13 @@ export const SidebarContent = (props: {
           </DragDropProvider>
         </div>
         <div class="shrink-0 w-full pt-3 pb-6 flex flex-col items-center gap-2">
-          <Tooltip placement={placement()} value={props.requirementsLabel()}>
+          <Tooltip placement={placement()} value={props.workbenchLabel()}>
             <IconButton
               icon="checklist"
               variant="ghost"
               size="large"
-              onClick={props.onOpenRequirements}
-              aria-label={props.requirementsLabel()}
-            />
-          </Tooltip>
-          <Tooltip placement={placement()} value={props.designLabel()}>
-            <IconButton
-              icon="review"
-              variant="ghost"
-              size="large"
-              onClick={props.onOpenDesign}
-              aria-label={props.designLabel()}
-            />
-          </Tooltip>
-          <Tooltip placement={placement()} value={props.developmentLabel()}>
-            <IconButton
-              icon="code"
-              variant="ghost"
-              size="large"
-              onClick={props.onOpenDevelopment}
-              aria-label={props.developmentLabel()}
-            />
-          </Tooltip>
-          <Tooltip placement={placement()} value={props.testLabel()}>
-            <IconButton
-              icon="shield"
-              variant="ghost"
-              size="large"
-              onClick={props.onOpenTest}
-              aria-label={props.testLabel()}
+              onClick={props.onOpenWorkbench}
+              aria-label={props.workbenchLabel()}
             />
           </Tooltip>
           <TooltipKeybind placement={placement()} title={props.settingsLabel()} keybind={props.settingsKeybind() ?? ""}>

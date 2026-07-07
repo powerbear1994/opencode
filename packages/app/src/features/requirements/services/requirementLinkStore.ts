@@ -54,6 +54,7 @@ let store: RequirementSessionLink[] | undefined
 let setStore: SetStoreFunction<RequirementSessionLink[]> | undefined
 const loadingProjects = new Set<string>()
 const loadedProjects = new Set<string>()
+const writeQueues = new Map<string, Promise<void>>()
 
 function ensureStore() {
   if (!store || !setStore) {
@@ -106,21 +107,35 @@ function saveRequirementLinkSet(
   links: RequirementSessionLink[],
   server?: ServerConnection.Any,
 ) {
-  void updateRequirementLinks({
+  queueRequirementLinkWrite(projectId, requirementId, () => updateRequirementLinks({
     server,
     project: projectId,
     requirementId,
     update: () => links.filter((link) => link.projectId === projectId && link.requirementId === requirementId),
-  })
+  }))
 }
 
 function saveRequirementLinkAppend(link: RequirementSessionLink, server?: ServerConnection.Any) {
-  void updateRequirementLinks({
+  queueRequirementLinkWrite(link.projectId, link.requirementId, () => updateRequirementLinks({
     server,
     project: link.projectId,
     requirementId: link.requirementId,
     update: (links) => uniqueLinks([...links, link]),
-  })
+  }))
+}
+
+function queueRequirementLinkWrite(projectId: string, requirementId: string, write: () => Promise<void>) {
+  const key = `${projectId}\u0000${requirementId}`
+  const next = (writeQueues.get(key) ?? Promise.resolve())
+    .catch(() => {})
+    .then(write)
+    .catch((error) => {
+      console.error("[requirements] failed to persist session link", error)
+    })
+    .finally(() => {
+      if (writeQueues.get(key) === next) writeQueues.delete(key)
+    })
+  writeQueues.set(key, next)
 }
 
 function appendLink(currentLinks: RequirementSessionLink[], link: Omit<RequirementSessionLink, "id" | "createdAt" | "updatedAt">) {
@@ -213,6 +228,12 @@ export function useRequirementLinks() {
     saveRequirementLinkSet(projectId, requirementId, promoted, server.current)
   }
 
+  function removeRequirementLinks(projectId: string, requirementId: string): void {
+    const next = links.filter((link) => link.projectId !== projectId || link.requirementId !== requirementId)
+    if (next.length === links.length) return
+    setLinks(reconcile(next))
+  }
+
   function updateLinkStatus(linkId: string, status: LinkStatus): void {
     const target = links.find((link) => link.id === linkId)
     if (!target) return
@@ -239,6 +260,7 @@ export function useRequirementLinks() {
     createLink,
     removeLink,
     unlinkRequirementFromSession,
+    removeRequirementLinks,
     updateLinkStatus,
     storePendingLink: storePendingRequirementLink,
     consumePendingLink: consumePendingRequirementLink,

@@ -72,7 +72,13 @@ import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { notifySessionTabsRemoved } from "@/components/titlebar-session-events"
 import { sessionTitle } from "@/utils/session-title"
+import { decode64 } from "@/utils/base64"
 import { useRequirementLinks } from "@/features/requirements/services/requirementLinkStore"
+import {
+  workbenchRequirementHref,
+  workflowArtifact,
+  workflowLabel,
+} from "@/features/requirements/services/workflowNavigation"
 import type { RequirementSessionLink } from "@/features/requirements/types"
 import { scheduleConnectedMeasure } from "./measure"
 import { createTimelineProjection } from "./projection"
@@ -88,35 +94,25 @@ const idle = { type: "idle" as const }
 type FramedTimelineRow = Exclude<TimelineRow.TimelineRow, { _tag: "TurnGap" }>
 type TimelineRowByTag<T extends TimelineRow.TimelineRow["_tag"]> = Extract<TimelineRow.TimelineRow, { _tag: T }>
 
-function workflowLabel(sourceMode: string | undefined) {
-  if (sourceMode === "test") return "测试"
-  if (sourceMode === "development") return "开发"
-  return sourceMode === "design" ? "设计" : "需求"
-}
-
-function workflowPath(sourceMode: string | undefined) {
-  if (sourceMode === "test") return "test"
-  if (sourceMode === "development") return "development"
-  return sourceMode === "design" ? "design" : "requirements"
-}
-
 function WorkflowReturnButton(props: { links: RequirementSessionLink[] }) {
   const navigate = useNavigate()
   const [open, setOpen] = createSignal(false)
   const primary = createMemo(() => props.links[0])
   const label = createMemo(() => {
     const link = primary()
-    if (!link) return "返回关联任务"
-    if (props.links.length > 1) return "返回关联任务"
-    return `返回${workflowLabel(link.sourceMode)}`
+    if (!link) return "返回 AI 工作台"
+    if (props.links.length > 1) return "返回 AI 工作台"
+    return `返回 AI 工作台 · ${workflowLabel(link.sourceMode)}`
   })
 
   function openLink(link: RequirementSessionLink) {
     setOpen(false)
     const project = link.projectId || link.projectPath || ""
-    navigate(
-      `/${workflowPath(link.sourceMode)}?project=${encodeURIComponent(project)}&selectedId=${encodeURIComponent(link.requirementId)}`,
-    )
+    navigate(workbenchRequirementHref({
+      project,
+      requirementId: link.requirementId,
+      artifact: workflowArtifact(link.sourceMode),
+    }))
   }
 
   return (
@@ -149,7 +145,7 @@ function WorkflowReturnButton(props: { links: RequirementSessionLink[] }) {
               <DropdownMenu.Portal>
                 <DropdownMenu.Content style={{ "min-width": "240px" }}>
                   <DropdownMenu.Group>
-                    <DropdownMenu.GroupLabel class="!px-2 !py-1">关联任务</DropdownMenu.GroupLabel>
+                    <DropdownMenu.GroupLabel class="!px-2 !py-1">返回 AI 工作台</DropdownMenu.GroupLabel>
                     <For each={props.links}>
                       {(item) => (
                         <DropdownMenu.Item onSelect={() => openLink(item)}>
@@ -366,11 +362,6 @@ export function MessageTimeline(props: {
 
   const [listRoot, setListRoot] = createSignal<HTMLDivElement>()
   const sessionID = createMemo(() => params.id)
-  const workflowLinks = createMemo(() => {
-    const id = sessionID()
-    if (!id) return []
-    return linkStore.links.filter((link) => link.sessionId === id)
-  })
   const sessionStatus = createMemo(() => {
     const id = sessionID()
     if (!id) return idle
@@ -381,6 +372,12 @@ export function MessageTimeline(props: {
     const id = sessionID()
     if (!id) return
     return sync().session.get(id)
+  })
+  const workflowLinks = createMemo(() => {
+    const id = sessionID()
+    const directory = info()?.directory || decode64(params.dir)
+    if (!id || !directory) return []
+    return linkStore.getLinksBySession(directory, id)
   })
   const titleValue = createMemo(() => info()?.title)
   const titleLabel = createMemo(() => sessionTitle(titleValue()))

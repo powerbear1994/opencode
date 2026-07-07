@@ -372,7 +372,7 @@ function RulesContent() {
                     when={selectedRule()?.exists}
                     fallback={
                       <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-4 py-12 text-center">
-                        <Icon name="open-file" size="large" class="text-[var(--v2-text-text-faint)]" />
+                        <Icon name="sliders" size="large" class="text-[var(--v2-text-text-faint)]" />
                         <p class="text-[13px] text-[var(--v2-text-text-muted)]">还没有可编辑的规则文件。</p>
                         <Show when={initActive()}>
                           <p class="max-w-[460px] text-[12px] text-[var(--v2-text-text-muted)]">

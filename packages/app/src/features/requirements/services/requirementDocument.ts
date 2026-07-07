@@ -1,7 +1,9 @@
 import type { ServerConnection } from "@/context/server"
 import { authTokenFromCredentials } from "@/utils/server"
 import type { RequirementItem } from "../types"
-import { requirementDocuments } from "./requirementProjectStore"
+import { getRequirementMetadata, requirementDocuments, type StoredRequirement } from "./requirementProjectStore"
+
+type DocumentKey = keyof StoredRequirement["documents"]
 
 export const requirementDocumentPath = (requirementId: string) =>
   requirementDocuments(requirementId).requirement
@@ -20,10 +22,7 @@ export async function loadRequirementDocument(input: {
   project: string
   requirement: RequirementItem
 }) {
-  const path = requirementDocumentPath(input.requirement.id)
-  const content = await readRequirementDocument(input.server, input.project, path)
-  if (content !== undefined) return { path, content, created: false }
-  return undefined
+  return loadDocument(input, "requirement", requirementDocumentPath(input.requirement.id))
 }
 
 export async function loadDesignDocument(input: {
@@ -31,10 +30,7 @@ export async function loadDesignDocument(input: {
   project: string
   requirement: RequirementItem
 }) {
-  const path = designDocumentPath(input.requirement.id)
-  const content = await readRequirementDocument(input.server, input.project, path)
-  if (content !== undefined) return { path, content, created: false }
-  return undefined
+  return loadDocument(input, "design", designDocumentPath(input.requirement.id))
 }
 
 export async function loadDevelopmentDocument(input: {
@@ -42,10 +38,7 @@ export async function loadDevelopmentDocument(input: {
   project: string
   requirement: RequirementItem
 }) {
-  const path = developmentDocumentPath(input.requirement.id)
-  const content = await readRequirementDocument(input.server, input.project, path)
-  if (content !== undefined) return { path, content, created: false }
-  return undefined
+  return loadDocument(input, "development", developmentDocumentPath(input.requirement.id))
 }
 
 export async function loadTestDocument(input: {
@@ -53,10 +46,7 @@ export async function loadTestDocument(input: {
   project: string
   requirement: RequirementItem
 }) {
-  const path = testDocumentPath(input.requirement.id)
-  const content = await readRequirementDocument(input.server, input.project, path)
-  if (content !== undefined) return { path, content, created: false }
-  return undefined
+  return loadDocument(input, "test", testDocumentPath(input.requirement.id))
 }
 
 export async function saveRequirementDocument(input: {
@@ -68,8 +58,29 @@ export async function saveRequirementDocument(input: {
   await writeRequirementDocument(input.server, input.project, input.path, input.content)
 }
 
+async function loadDocument(
+  input: {
+    server: ServerConnection.Any | undefined
+    project: string
+    requirement: RequirementItem
+  },
+  key: DocumentKey,
+  defaultPath: string,
+) {
+  const metadata = await getRequirementMetadata({
+    server: input.server,
+    project: input.project,
+    requirementId: input.requirement.id,
+  })
+  const paths = uniquePaths([metadata?.documents[key], defaultPath])
+  for (const path of paths) {
+    const content = await readRequirementDocument(input.server, input.project, path)
+    if (content !== undefined) return { path, content, created: false }
+  }
+  return undefined
+}
+
 async function readRequirementDocument(server: ServerConnection.Any | undefined, project: string, path: string) {
-  if (!(await requirementDocumentExists(server, project, path))) return undefined
   const response = await fetch(requirementUrl(server, project, readPath(path)), {
     headers: requestHeaders(server, project),
   })
@@ -79,25 +90,6 @@ async function readRequirementDocument(server: ServerConnection.Any | undefined,
 
 function readPath(path: string) {
   return `/api/fs/read/${encodeURIComponent(path)}`
-}
-
-async function requirementDocumentExists(server: ServerConnection.Any | undefined, project: string, path: string) {
-  const response = await fetch(requirementUrl(server, project, "/api/fs/find", {
-    query: path,
-    type: "file",
-    limit: "1000",
-  }), {
-    headers: requestHeaders(server, project),
-  })
-  if (!response.ok) return false
-  const payload = await response.json()
-  const entries = Array.isArray(payload) ? payload : payload?.data
-  if (!Array.isArray(entries)) return false
-  return entries.some((entry) => {
-    if (typeof entry !== "object" || entry === null) return false
-    const entryPath = (entry as { path?: unknown }).path
-    return typeof entryPath === "string" && entryPath.replace(/\\/g, "/") === path
-  })
 }
 
 async function writeRequirementDocument(
@@ -129,6 +121,18 @@ function requirementUrl(
     url.searchParams.set(key, value)
   }
   return url.toString()
+}
+
+function uniquePaths(paths: Array<string | undefined>) {
+  const seen = new Set<string>()
+  return paths
+    .filter((path): path is string => typeof path === "string" && path.trim().length > 0)
+    .map((path) => path.trim())
+    .filter((path) => {
+      if (seen.has(path)) return false
+      seen.add(path)
+      return true
+    })
 }
 
 function requestHeaders(server: ServerConnection.Any | undefined, project: string) {

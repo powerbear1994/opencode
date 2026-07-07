@@ -99,6 +99,10 @@ export function useRequirementWorkflow() {
     saveRecord(result.record, server.current)
   }
 
+  function removeRecord(projectId: string, requirementId: string) {
+    setRecords(reconcile(records.filter((record) => record.projectId !== projectId || record.requirementId !== requirementId)))
+  }
+
   function lockRequirement(projectId: string, requirementId: string) {
     const now = new Date().toISOString()
     mutate(projectId, requirementId, (record) => ({ ...record, lockedAt: record.lockedAt ?? now }))
@@ -126,6 +130,7 @@ export function useRequirementWorkflow() {
     const now = new Date().toISOString()
     mutate(projectId, requirementId, (record) => ({
       ...record,
+      lockedAt: record.lockedAt ?? now,
       designGeneratedAt: record.designGeneratedAt ?? now,
       designLockedAt: record.designLockedAt ?? now,
     }))
@@ -154,6 +159,9 @@ export function useRequirementWorkflow() {
     const now = new Date().toISOString()
     mutate(projectId, requirementId, (record) => ({
       ...record,
+      lockedAt: record.lockedAt ?? now,
+      designGeneratedAt: record.designGeneratedAt ?? now,
+      designLockedAt: record.designLockedAt ?? now,
       developmentGeneratedAt: record.developmentGeneratedAt ?? now,
       developmentLockedAt: record.developmentLockedAt ?? now,
     }))
@@ -177,6 +185,11 @@ export function useRequirementWorkflow() {
     const now = new Date().toISOString()
     mutate(projectId, requirementId, (record) => ({
       ...record,
+      lockedAt: record.lockedAt ?? now,
+      designGeneratedAt: record.designGeneratedAt ?? now,
+      designLockedAt: record.designLockedAt ?? now,
+      developmentGeneratedAt: record.developmentGeneratedAt ?? now,
+      developmentLockedAt: record.developmentLockedAt ?? now,
       testGeneratedAt: record.testGeneratedAt ?? now,
       testLockedAt: record.testLockedAt ?? now,
     }))
@@ -199,5 +212,6 @@ export function useRequirementWorkflow() {
     unlockDevelopment,
     markTestGenerated,
     lockTest,
+    removeRecord,
   }
 }

@@ -130,10 +130,7 @@ export default function LegacyLayout(props: ParentProps) {
   const initialDirectory = decode64(params.dir)
   const location = useLocation()
   const isWorkflowRoute = createMemo(() =>
-    location.pathname === "/requirements" ||
-    location.pathname === "/design" ||
-    location.pathname === "/development" ||
-    location.pathname === "/test" ||
+    location.pathname === "/workbench" ||
     location.pathname === "/skills" ||
     location.pathname === "/agents" ||
     location.pathname === "/rules",
@@ -2269,25 +2266,10 @@ export default function LegacyLayout(props: ParentProps) {
       onOpenHelp={() => platform.openLink("https://opencode.ai/desktop-feedback")}
       logoutLabel={() => "登出"}
       onLogout={authLogout()}
-      requirementsLabel={() => language.t("sidebar.requirements")}
-      onOpenRequirements={() => {
+      workbenchLabel={() => "AI 工作台"}
+      onOpenWorkbench={() => {
         const project = currentProject()
-        navigate(project ? `/requirements?project=${encodeURIComponent(project.worktree)}` : "/requirements")
-      }}
-      designLabel={() => language.t("sidebar.design")}
-      onOpenDesign={() => {
-        const project = currentProject()
-        navigate(project ? `/design?project=${encodeURIComponent(project.worktree)}` : "/design")
-      }}
-      developmentLabel={() => "开发"}
-      onOpenDevelopment={() => {
-        const project = currentProject()
-        navigate(project ? `/development?project=${encodeURIComponent(project.worktree)}` : "/development")
-      }}
-      testLabel={() => "测试"}
-      onOpenTest={() => {
-        const project = currentProject()
-        navigate(project ? `/test?project=${encodeURIComponent(project.worktree)}` : "/test")
+        navigate(project ? `/workbench?project=${encodeURIComponent(project.worktree)}` : "/workbench")
       }}
       renderPanel={() => {
         const project = () => currentProject()

@@ -1,7 +1,13 @@
 import type { ServerConnection } from "@/context/server"
 import { authTokenFromCredentials } from "@/utils/server"
 import { uuid } from "@/utils/uuid"
-import type { LinkStatus, RequirementItem, RequirementSendMode, RequirementSessionLink } from "../types"
+import type {
+  LinkStatus,
+  RequirementItem,
+  RequirementSendMode,
+  RequirementSessionLink,
+  RequirementSkillBindings,
+} from "../types"
 
 export interface RequirementWorkflowRecord {
   projectId: string
@@ -34,7 +40,9 @@ export interface StoredRequirement {
     design: string
     development: string
     test: string
+    summary?: string
   }
+  skills: RequirementSkillBindings
   sessionLinks: RequirementSessionLink[]
 }
 
@@ -47,6 +55,7 @@ const ROOT = ".opencode/requirements"
 const INDEX_PATH = `${ROOT}/index.json`
 const ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz"
 const ID_RANDOM_LENGTH = 7
+const requirementUpdateQueues = new Map<string, Promise<void>>()
 
 export const requirementMetadataPath = (requirementId: string) => `${ROOT}/${safeRequirementId(requirementId)}.json`
 
@@ -57,12 +66,13 @@ export function requirementDocuments(requirementId: string) {
     design: `docs/ai-workflow/${id}/02-design.md`,
     development: `docs/ai-workflow/${id}/03-development.md`,
     test: `docs/ai-workflow/${id}/04-test.md`,
+    summary: `docs/ai-workflow/${id}/05-summary.md`,
   }
 }
 
 export async function listRequirements(input: { server?: ServerConnection.Any; project: string }) {
   if (!input.project) return []
-  return (await readIndex(input)).requirements
+  return (await readStoredRequirements(input)).map(toRequirementItem)
 }
 
 export async function getRequirement(input: { server?: ServerConnection.Any; project: string; requirementId: string }) {
@@ -97,6 +107,7 @@ export async function createRequirement(input: {
         requirementId: id,
       },
       documents: requirementDocuments(id),
+      skills: emptySkillBindings(),
       sessionLinks: [],
     },
     input.project,
@@ -104,11 +115,21 @@ export async function createRequirement(input: {
   )
 
   await writeStoredRequirement(input, stored)
-  await writeIndex(input, {
-    version: 1,
-    requirements: [toRequirementItem(stored), ...index.requirements],
-  })
+  await appendIndexItem(input, toRequirementItem(stored))
   return toRequirementItem(stored)
+}
+
+export async function deleteRequirement(input: {
+  server?: ServerConnection.Any
+  project: string
+  requirementId: string
+}) {
+  await queueStoredRequirementUpdate(input, async () => {
+    const index = await readRawIndexPayload(input)
+    const requirements = index.requirements.filter((item) => rawRequirementId(item) !== input.requirementId)
+    if (requirements.length === index.requirements.length) return
+    await writeRawIndexPayload(input, index.raw, requirements)
+  })
 }
 
 export async function updateRequirementWorkflow(input: {
@@ -135,6 +156,22 @@ export async function updateRequirementLinks(input: {
   }))
 }
 
+export async function getRequirementMetadata(input: { server?: ServerConnection.Any; project: string; requirementId: string }) {
+  return await readStoredRequirement(input)
+}
+
+export async function updateRequirementSkills(input: {
+  server?: ServerConnection.Any
+  project: string
+  requirementId: string
+  skills: RequirementSkillBindings
+}) {
+  await updateStoredRequirement(input, (stored) => ({
+    ...stored,
+    skills: normalizeSkillBindings(input.skills),
+  }))
+}
+
 export async function loadRequirementWorkflowRecords(input: { server?: ServerConnection.Any; project: string }) {
   const requirements = await readStoredRequirements(input)
   return requirements.map((requirement) => requirement.workflow)
@@ -149,18 +186,35 @@ async function updateStoredRequirement(
   input: { server?: ServerConnection.Any; project: string; requirementId: string },
   update: (stored: StoredRequirement) => StoredRequirement,
 ) {
-  const existing = await readStoredRequirement(input)
-  if (!existing) return
-  const stored = normalizeStoredRequirement(
-    {
-      ...update(existing),
-      updatedAt: new Date().toISOString(),
-    },
-    input.project,
-    input.requirementId,
-  )
-  await writeStoredRequirement(input, stored)
-  await upsertIndexItem(input, toRequirementItem(stored))
+  await queueStoredRequirementUpdate(input, async () => {
+    const existing = await readStoredRequirement(input)
+    if (!existing) return
+    const stored = normalizeStoredRequirement(
+      {
+        ...update(existing),
+        updatedAt: new Date().toISOString(),
+      },
+      input.project,
+      input.requirementId,
+    )
+    await writeStoredRequirement(input, stored)
+    await upsertIndexItem(input, toRequirementItem(stored))
+  })
+}
+
+function queueStoredRequirementUpdate(
+  input: { project: string; requirementId: string },
+  update: () => Promise<void>,
+) {
+  const key = `${input.project}\u0000${input.requirementId}`
+  const next = (requirementUpdateQueues.get(key) ?? Promise.resolve())
+    .catch(() => {})
+    .then(update)
+    .finally(() => {
+      if (requirementUpdateQueues.get(key) === next) requirementUpdateQueues.delete(key)
+    })
+  requirementUpdateQueues.set(key, next)
+  return next
 }
 
 async function readStoredRequirements(input: { server?: ServerConnection.Any; project: string }) {
@@ -188,30 +242,59 @@ async function writeStoredRequirement(
 }
 
 async function readIndex(input: { server?: ServerConnection.Any; project: string }): Promise<RequirementIndex> {
-  const value = await readJson(input, INDEX_PATH)
-  if (!value) return { version: 1, requirements: [] }
-  const raw = typeof value === "object" && value !== null ? value as Partial<RequirementIndex> : {}
-  const requirements = Array.isArray(raw.requirements)
-    ? raw.requirements.map((item) => normalizeRequirementItem(item, input.project))
+  return await readIndexFile(input)
+}
+
+async function readIndexFile(input: { server?: ServerConnection.Any; project: string }): Promise<RequirementIndex> {
+  const payload = await readRawIndexPayload(input)
+  const requirements = payload.requirements.length
+    ? payload.requirements.map((item) => normalizeRequirementItem(item, input.project))
     : []
   return { version: 1, requirements: uniqueRequirements(requirements) }
 }
 
-async function writeIndex(input: { server?: ServerConnection.Any; project: string }, index: RequirementIndex) {
-  await writeJson(input, INDEX_PATH, {
-    version: 1,
-    requirements: uniqueRequirements(index.requirements).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
-  })
+async function readRawIndexPayload(input: { server?: ServerConnection.Any; project: string }) {
+  const value = await readJson(input, INDEX_PATH)
+  const raw = typeof value === "object" && value !== null ? value as Record<string, unknown> : {}
+  return {
+    raw,
+    requirements: Array.isArray(raw.requirements) ? raw.requirements : [],
+  }
 }
 
 async function upsertIndexItem(
   input: { server?: ServerConnection.Any; project: string },
   requirement: RequirementItem,
 ) {
-  const index = await readIndex(input)
-  await writeIndex(input, {
+  const index = await readRawIndexPayload(input)
+  const existingIndex = index.requirements.findIndex((item) => rawRequirementId(item) === requirement.id)
+  const requirements = existingIndex >= 0
+    ? index.requirements.map((item, itemIndex) => itemIndex === existingIndex ? requirement : item)
+    : [requirement, ...index.requirements]
+  await writeRawIndexPayload(input, index.raw, requirements)
+}
+
+async function appendIndexItem(
+  input: { server?: ServerConnection.Any; project: string },
+  requirement: RequirementItem,
+) {
+  const index = await readRawIndexPayload(input)
+  if (index.requirements.some((item) => rawRequirementId(item) === requirement.id)) {
+    await upsertIndexItem(input, requirement)
+    return
+  }
+  await writeRawIndexPayload(input, index.raw, [requirement, ...index.requirements])
+}
+
+async function writeRawIndexPayload(
+  input: { server?: ServerConnection.Any; project: string },
+  raw: Record<string, unknown>,
+  requirements: unknown[],
+) {
+  await writeJson(input, INDEX_PATH, {
+    ...raw,
     version: 1,
-    requirements: [requirement, ...index.requirements.filter((item) => item.id !== requirement.id)],
+    requirements,
   })
 }
 
@@ -276,6 +359,7 @@ function normalizeStoredRequirement(input: unknown, project: string, requirement
       ...requirementDocuments(id),
       ...(typeof raw.documents === "object" && raw.documents !== null ? raw.documents : {}),
     },
+    skills: normalizeSkillBindings(raw.skills),
     sessionLinks: Array.isArray(raw.sessionLinks) ? uniqueLinks(raw.sessionLinks.map(normalizeLink)) : [],
   }
 }
@@ -391,6 +475,12 @@ function readPath(path: string) {
   return `/api/fs/read/${encodeURIComponent(path)}`
 }
 
+function rawRequirementId(input: unknown) {
+  if (typeof input !== "object" || input === null) return undefined
+  const id = (input as { id?: unknown }).id
+  return typeof id === "string" ? id : undefined
+}
+
 function normalizeStatus(value: unknown): RequirementItem["status"] {
   if (value === "confirming" || value === "done") return value
   return "pending"
@@ -404,6 +494,30 @@ function normalizePriority(value: unknown): RequirementItem["priority"] {
 function normalizeSourceMode(value: unknown): RequirementSendMode {
   if (value === "design" || value === "development" || value === "test") return value
   return "raw"
+}
+
+function emptySkillBindings(): RequirementSkillBindings {
+  return {
+    requirement: [],
+    design: [],
+    development: [],
+    test: [],
+  }
+}
+
+function normalizeSkillBindings(input: unknown): RequirementSkillBindings {
+  const raw = typeof input === "object" && input !== null ? input as Partial<RequirementSkillBindings> : {}
+  return {
+    requirement: normalizeSkillList(raw.requirement),
+    design: normalizeSkillList(raw.design),
+    development: normalizeSkillList(raw.development),
+    test: normalizeSkillList(raw.test),
+  }
+}
+
+function normalizeSkillList(input: unknown) {
+  if (!Array.isArray(input)) return []
+  return input.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean)
 }
 
 function normalizeLinkStatus(value: unknown): LinkStatus {
@@ -422,9 +536,11 @@ function requirementUrl(
   server: ServerConnection.Any | undefined,
   project: string,
   pathname: string,
+  params?: Record<string, string>,
 ) {
   const url = new URL(pathname, server?.http.url ?? window.location.origin)
   url.searchParams.set("location[directory]", project)
+  Object.entries(params ?? {}).forEach(([key, value]) => url.searchParams.set(key, value))
   return url.toString()
 }
 
