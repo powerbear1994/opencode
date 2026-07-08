@@ -11,6 +11,7 @@ export function mergeAgentFrontmatter(
     description?: string
     mode?: "subagent" | "primary" | "all"
     model?: string
+    steps?: number
     temperature?: number
     color?: string
     hidden?: boolean
@@ -23,6 +24,7 @@ export function mergeAgentFrontmatter(
   if (input.description !== undefined) setOptional(next, "description", input.description)
   if (input.mode !== undefined) next.mode = input.mode
   if (input.model !== undefined) setOptional(next, "model", input.model)
+  if (input.steps !== undefined) next.steps = input.steps
   if (input.temperature !== undefined) next.temperature = input.temperature
   if (input.color !== undefined) setOptional(next, "color", input.color)
   if (input.hidden !== undefined) next.hidden = input.hidden

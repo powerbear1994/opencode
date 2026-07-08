@@ -16,12 +16,14 @@ describe("agent file helpers", () => {
         },
         {
           model: "",
+          steps: 12,
           permission: { read: "allow" },
         },
       ),
     ).toEqual({
       variant: "high",
       options: { reasoning: "high" },
+      steps: 12,
       permission: {
         task: { "*": "allow", general: "deny" },
         read: "allow",

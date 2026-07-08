@@ -2,11 +2,35 @@ import { Location } from "@opencode-ai/core/location"
 import { LocationServiceMap } from "@opencode-ai/core/location-services"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { HttpServerRequest } from "effect/unstable/http"
-import { HttpApiMiddleware } from "effect/unstable/httpapi"
+import { HttpApiMiddleware, OpenApi } from "effect/unstable/httpapi"
 
 export type LocationServices = Layer.Success<ReturnType<(typeof LocationServiceMap.Service)["get"]>>
+
+export const LocationQuery = Schema.Struct({
+  location: Schema.optional(
+    Schema.Struct({
+      directory: Schema.optional(Schema.String),
+      workspace: Schema.optional(Schema.String),
+    }),
+  ),
+}).annotate({ identifier: "LocationQuery" })
+
+export const locationQueryOpenApi = OpenApi.annotations({
+  transform: (operation) => {
+    const parameters = operation.parameters
+    if (!Array.isArray(parameters)) return operation
+    return {
+      ...operation,
+      parameters: parameters.map((parameter) =>
+        parameter?.name === "location" && parameter?.in === "query"
+          ? { ...parameter, style: "deepObject", explode: true }
+          : parameter,
+      ),
+    }
+  },
+})
 
 export class LocationMiddleware extends HttpApiMiddleware.Service<LocationMiddleware, { provides: LocationServices }>()(
   "@opencode/HttpApiLocation",

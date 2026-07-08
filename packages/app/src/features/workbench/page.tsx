@@ -517,7 +517,7 @@ const WorkbenchContent: Component = () => {
                   {projectItems().length ? "没有匹配的工作项" : "暂无工作项"}
                 </p>
                 <p class="mt-1 text-[12px] text-[var(--v2-text-text-faint)]">
-                  {projectItems().length ? "换个关键词或状态再试试。" : "创建后会存储在当前项目的 .opencode 中。"}
+                  {projectItems().length ? "换个关键词或状态再试试。" : "创建后会存储在当前项目的 docs/requirements 中。"}
                 </p>
                 <Show when={!projectItems().length}>
                   <ButtonV2 size="small" variant="neutral" icon="plus" class="mt-4" onClick={openCreateDialog}>
@@ -708,7 +708,10 @@ const WorkbenchDetail: Component<{
   const sessionById = createMemo(() => new Map((sessionStore()?.session ?? []).map((session) => [session.id, session] as const)))
   const sessionReady = createMemo(() => !!sessionStore() && sessionStore()?.status !== "loading")
   const links = createMemo(() => linkStore.getLinksByRequirement(props.project, props.id).filter((link) => !!link.sessionId))
-  const liveLinks = createMemo(() => links())
+  const liveLinks = createMemo(() => {
+    if (!sessionReady()) return links()
+    return links().filter((link) => sessionById().has(link.sessionId))
+  })
   const developmentLinks = createMemo(() => liveLinks().filter((link) => link.sourceMode === "development"))
   const workflowRecord = createMemo(() => workflow.getRecord(props.project, props.id) ?? currentMetadata()?.workflow)
   const requirementReady = createMemo(() =>
@@ -1087,6 +1090,13 @@ const WorkbenchDetail: Component<{
     onCleanup(() => unsubscribe.forEach((off) => off()))
   })
 
+  createEffect(() => {
+    if (!sessionReady()) return
+    links()
+      .filter((link) => !sessionById().has(link.sessionId))
+      .forEach((link) => linkStore.unlinkRequirementFromSession(link.projectId, link.requirementId, link.sessionId))
+  })
+
   function refreshArtifacts() {
     return Promise.all([
       refetchRequirementDocument(),
@@ -1105,10 +1115,7 @@ const WorkbenchDetail: Component<{
   }
 
   function existingStageLink(stage: RequirementSendMode) {
-    return liveLinks().find((link) => {
-      if (link.sourceMode !== stage) return false
-      return !sessionReady() || sessionById().has(link.sessionId)
-    })
+    return liveLinks().find((link) => link.sourceMode === stage)
   }
 
   async function runStageSession(stage: RequirementSendMode) {
@@ -1317,7 +1324,7 @@ const WorkbenchDetail: Component<{
         </Show>
         <Show when={currentRequirement()}>
           {(item) => (
-            <div class="mx-auto flex max-w-[1080px] flex-col gap-4">
+            <div class="flex w-full max-w-none flex-col gap-4">
               <div class="rounded-[8px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-4 py-3">
                 <div class="flex items-start justify-between gap-4">
                   <div class="min-w-0">
@@ -1345,7 +1352,7 @@ const WorkbenchDetail: Component<{
                 </div>
               </div>
 
-              <div class="min-h-[520px] overflow-hidden rounded-[8px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] shadow-sm">
+              <div class="flex min-h-[calc(100vh-190px)] flex-col overflow-hidden rounded-[8px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] shadow-sm">
                 <div class="border-b border-[var(--v2-border-border-base)] px-4 py-3">
                   <div class="grid grid-cols-5 gap-1 rounded-[8px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-deep)] p-1">
                     <For each={ARTIFACTS}>
@@ -1419,14 +1426,14 @@ const WorkbenchDetail: Component<{
                     </Show>
                   </div>
                 </div>
-                <div class="min-h-[460px] overflow-y-auto px-5 py-4">
+                <div class="flex min-h-0 flex-1 overflow-y-auto px-5 py-4">
                   <Show
                     when={editingArtifact()}
                     fallback={
                       <Show
                         when={artifactContent()}
                         fallback={
-                          <div class="flex min-h-[420px] items-center justify-center text-center">
+                          <div class="flex min-h-[calc(100vh-330px)] flex-1 items-center justify-center text-center">
                             <div>
                               <p class="text-[14px] font-[530] text-[var(--v2-text-text-muted)]">暂无产物</p>
                               <p class="mt-1 text-[12px] text-[var(--v2-text-text-faint)]">
@@ -1437,21 +1444,25 @@ const WorkbenchDetail: Component<{
                         }
                       >
                         {(content) => (
-                          <Markdown
-                            text={content()}
-                            cacheKey={`workbench:${props.id}:${activeArtifact()}:${content()}`}
-                            class="text-[13px] leading-relaxed text-[var(--v2-text-text-muted)]"
-                          />
+                          <div class="min-h-[calc(100vh-330px)] flex-1">
+                            <Markdown
+                              text={content()}
+                              cacheKey={`workbench:${props.id}:${activeArtifact()}:${content()}`}
+                              class="text-[13px] leading-relaxed text-[var(--v2-text-text-muted)]"
+                            />
+                          </div>
                         )}
                       </Show>
                     }
                   >
-                    <textarea
-                      value={artifactDraft()}
-                      onInput={(event) => setArtifactDraft(event.currentTarget.value)}
-                      class="min-h-[700px] w-full resize-y rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-deep)] px-4 py-3 font-mono text-[13px] leading-6 text-[var(--v2-text-text-base)] outline-none focus:border-[var(--v2-blue-400)]"
-                      spellcheck={false}
-                    />
+                    <div class="flex min-h-[calc(100vh-330px)] flex-1">
+                      <textarea
+                        value={artifactDraft()}
+                        onInput={(event) => setArtifactDraft(event.currentTarget.value)}
+                        class="min-h-[700px] w-full flex-1 resize-y rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-deep)] px-4 py-3 font-mono text-[13px] leading-6 text-[var(--v2-text-text-base)] outline-none focus:border-[var(--v2-blue-400)]"
+                        spellcheck={false}
+                      />
+                    </div>
                   </Show>
                 </div>
               </div>

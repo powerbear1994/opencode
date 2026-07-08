@@ -4,7 +4,7 @@ import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Tooltip } from "@opencode-ai/ui/tooltip"
 import type { Agent } from "@opencode-ai/sdk/v2/client"
 import type { AgentSource } from "./types"
-import { isBuiltinAgent, SOURCE_LABELS } from "./types"
+import { SOURCE_LABELS } from "./types"
 
 // ── Filter tab ─────────────────────────────────────────────────────────────────
 
@@ -51,7 +51,10 @@ const SourceBadge: Component<{ source: AgentSource }> = (props) => (
     classList={{
       "bg-[var(--v2-blue-400)]/10 text-[var(--v2-blue-500)]": props.source === "project",
       "bg-[var(--v2-green-400)]/10 text-[var(--v2-green-600)]": props.source === "global",
+      "bg-[var(--v2-amber-400)]/10 text-[var(--v2-amber-600)]": props.source === "project-config",
+      "bg-[var(--v2-teal-400)]/10 text-[var(--v2-teal-600)]": props.source === "global-config",
       "bg-[var(--v2-background-bg-layer-02)] text-[var(--v2-text-text-muted)]": props.source === "built-in",
+      "bg-[var(--v2-red-400)]/10 text-[var(--v2-red-600)]": props.source === "unknown",
     }}
   >
     {SOURCE_LABELS[props.source]}
@@ -61,7 +64,10 @@ const SourceBadge: Component<{ source: AgentSource }> = (props) => (
 const SOURCE_ORDER: Record<AgentSource, number> = {
   project: 0,
   global: 1,
-  "built-in": 2,
+  "project-config": 2,
+  "global-config": 3,
+  "built-in": 4,
+  unknown: 5,
 }
 
 // ── Component ──────────────────────────────────────────────────────────────────
@@ -95,8 +101,7 @@ export const AgentList: Component<AgentListProps> = (props) => {
   })
 
   const getSource = (name: string): AgentSource => {
-    if (isBuiltinAgent(name)) return "built-in"
-    return props.sources.get(name) ?? "project"
+    return props.sources.get(name) ?? "unknown"
   }
 
   return (
@@ -143,10 +148,29 @@ export const AgentList: Component<AgentListProps> = (props) => {
             全局 {props.counts.global}
           </FilterTab>
           <FilterTab
+            active={props.sourceFilter === "project-config"}
+            disabled={!props.hasProject}
+            onClick={() => props.onSourceFilterChange("project-config")}
+          >
+            项目配置 {props.counts["project-config"]}
+          </FilterTab>
+          <FilterTab
+            active={props.sourceFilter === "global-config"}
+            onClick={() => props.onSourceFilterChange("global-config")}
+          >
+            全局配置 {props.counts["global-config"]}
+          </FilterTab>
+          <FilterTab
             active={props.sourceFilter === "built-in"}
             onClick={() => props.onSourceFilterChange("built-in")}
           >
             内置 {props.counts["built-in"]}
+          </FilterTab>
+          <FilterTab
+            active={props.sourceFilter === "unknown"}
+            onClick={() => props.onSourceFilterChange("unknown")}
+          >
+            未知 {props.counts.unknown}
           </FilterTab>
         </div>
       </div>

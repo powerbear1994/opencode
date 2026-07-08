@@ -4,12 +4,12 @@ import { Markdown } from "@opencode-ai/session-ui/markdown"
 import { Button } from "@opencode-ai/ui/button"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { TextField } from "@opencode-ai/ui/text-field"
-import { Dialog } from "@opencode-ai/ui/v2/dialog-v2"
+import { Dialog, DialogHeader, DialogTitleGroup } from "@opencode-ai/ui/v2/dialog-v2"
 import { SelectV2 } from "@opencode-ai/ui/v2/select-v2"
 import { Switch } from "@opencode-ai/ui/v2/switch-v2"
 import { useModels } from "@/context/models"
 import type { AgentFormData, AgentLocation, PermissionAction } from "./types"
-import { BUILTIN_AGENT_NAMES, DEFAULT_PERMISSIONS, PERMISSION_KEYS, PERMISSION_TOOL_LABELS, type PermissionKey } from "./types"
+import { DEFAULT_PERMISSIONS, PERMISSION_KEYS, PERMISSION_TOOL_LABELS, type PermissionKey } from "./types"
 import "./editor.css"
 
 interface AgentEditorProps {
@@ -41,6 +41,7 @@ function defaultFormData(
     mode: form.mode ?? (createAsSubagent ? "subagent" : "all"),
     description: form.description ?? "",
     model: form.model ?? "",
+    steps: form.steps ?? 0,
     temperature: form.temperature ?? 0,
     color: form.color ?? "",
     hidden: form.hidden ?? false,
@@ -166,7 +167,6 @@ export const AgentEditor: Component<AgentEditorProps> = (props) => {
   const nameError = createMemo(() => {
     if (!(state.form.name ?? "").trim()) return ""
     if (!/^[a-z][a-z0-9._-]*$/.test(normalizedName())) return "必须以字母开头，仅支持字母、数字、点、下划线和连字符。"
-    if (BUILTIN_AGENT_NAMES.has(normalizedName())) return "该名称为内置智能体保留名称。"
     return ""
   })
   const valid = createMemo(
@@ -320,6 +320,15 @@ export const AgentEditor: Component<AgentEditorProps> = (props) => {
                 <Show when={state.advancedOpen}>
                   <div class="agent-editor-advanced-fields">
                     <TextField
+                      label="最大步数（选填）"
+                      value={state.form.steps === 0 ? "" : String(state.form.steps)}
+                      onChange={(value) => {
+                        const steps = Number.parseInt(value, 10)
+                        update({ steps: Number.isNaN(steps) || steps < 1 ? 0 : steps })
+                      }}
+                      placeholder="使用默认值"
+                    />
+                    <TextField
                       label="温度（选填）"
                       value={state.form.temperature === 0 ? "" : String(state.form.temperature)}
                       onChange={(value) => {
@@ -442,7 +451,10 @@ export const AgentEditor: Component<AgentEditorProps> = (props) => {
   }
 
   return (
-    <Dialog title={props.title} size="large" class="agent-editor-dialog">
+    <Dialog size="large" class="agent-editor-dialog">
+      <DialogHeader>
+        <DialogTitleGroup title={props.title} description="保存后会重新加载智能体列表并同步当前配置。" />
+      </DialogHeader>
       {content()}
     </Dialog>
   )

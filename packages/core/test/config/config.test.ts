@@ -795,4 +795,47 @@ describe("Config", () => {
       }),
     ),
   )
+
+  it.live("does not load parent .opencode directories beyond a non-git project boundary", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) => {
+        const global = path.join(tmp.path, "global")
+        const parent = path.join(tmp.path, "projects")
+        const directory = path.join(parent, "app")
+        return Effect.gen(function* () {
+          yield* Effect.promise(async () => {
+            await fs.mkdir(global, { recursive: true })
+            await fs.mkdir(path.join(parent, ".opencode"), { recursive: true })
+            await fs.mkdir(path.join(directory, ".opencode"), { recursive: true })
+            await Promise.all([
+              fs.writeFile(path.join(global, "opencode.json"), JSON.stringify({ $schema: "global" })),
+              fs.writeFile(path.join(parent, ".opencode", "opencode.json"), JSON.stringify({ $schema: "parent-dot" })),
+              fs.writeFile(
+                path.join(directory, ".opencode", "opencode.json"),
+                JSON.stringify({ $schema: "directory-dot" }),
+              ),
+            ])
+          })
+
+          return yield* Effect.gen(function* () {
+            const config = yield* Config.Service
+            const entries = yield* config.entries()
+
+            expect(entries.filter((entry) => entry.type === "directory").map((entry) => entry.path)).toEqual([
+              AbsolutePath.make(global),
+              AbsolutePath.make(path.join(directory, ".opencode")),
+            ])
+            expect(
+              entries
+                .filter((entry): entry is Config.Document => entry.type === "document")
+                .map((document) => document.info.$schema),
+            ).toEqual(["global", "directory-dot"])
+          }).pipe(Effect.provide(testLayer(directory, global, directory)))
+        })
+      }),
+    ),
+  )
 })

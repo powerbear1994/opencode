@@ -101,13 +101,15 @@ const AgentsContent = () => {
     return val.sources
   }
   const agentSource = (agentName: string): AgentSource => {
-    if (isBuiltinAgent(agentName)) return "built-in"
-    return sources().get(agentName) ?? "project"
+    return sources().get(agentName) ?? "unknown"
   }
   const sourceOrder: Record<AgentSource, number> = {
     project: 0,
     global: 1,
-    "built-in": 2,
+    "project-config": 2,
+    "global-config": 3,
+    "built-in": 4,
+    unknown: 5,
   }
   const orderedAgents = createMemo(() =>
     agents()
@@ -118,9 +120,12 @@ const AgentsContent = () => {
     const list = agents()
     return {
       all: list.length,
-      "built-in": list.filter((agent) => isBuiltinAgent(agent.name)).length,
-      project: list.filter((agent) => !isBuiltinAgent(agent.name) && (sources().get(agent.name) ?? "project") === "project").length,
-      global: list.filter((agent) => !isBuiltinAgent(agent.name) && sources().get(agent.name) === "global").length,
+      "built-in": list.filter((agent) => agentSource(agent.name) === "built-in").length,
+      project: list.filter((agent) => agentSource(agent.name) === "project").length,
+      global: list.filter((agent) => agentSource(agent.name) === "global").length,
+      "project-config": list.filter((agent) => agentSource(agent.name) === "project-config").length,
+      "global-config": list.filter((agent) => agentSource(agent.name) === "global-config").length,
+      unknown: list.filter((agent) => agentSource(agent.name) === "unknown").length,
     }
   })
 
@@ -140,9 +145,22 @@ const AgentsContent = () => {
   const selectedSource = (): AgentSource => {
     const agent = selectedAgent()
     if (!agent) return "built-in"
-    if (isBuiltinAgent(agent.name)) return "built-in"
-    return sources().get(agent.name) ?? "project"
+    return agentSource(agent.name)
   }
+  const [selectedSourcePath] = createResource(
+    () => {
+      const svc = service()
+      const agent = selectedAgent()
+      if (!svc || !agent) return
+      const source = selectedSource()
+      if (source === "built-in" || source === "unknown") return
+      return { svc, id: agent.name, source }
+    },
+    async (input) => {
+      const file = await input.svc.readAgentFile(input.id, input.source)
+      return file.path
+    },
+  )
 
   const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -166,7 +184,11 @@ const AgentsContent = () => {
   ) => {
     if (!value) return false
     if (options.expectedName && !value.agents.some((agent) => agent.name === options.expectedName)) return false
-    if (options.removedName && value.agents.some((agent) => agent.name === options.removedName)) return false
+    if (
+      options.removedName &&
+      value.agents.some((agent) => agent.name === options.removedName) &&
+      value.sources.get(options.removedName) !== "built-in"
+    ) return false
     if (customCount(value) < customCount(options.fallback, options.removedName)) return false
     return true
   }
@@ -247,7 +269,8 @@ const AgentsContent = () => {
     const svc = service()
     if (!svc) return
     try {
-      const source = sources().get(id) ?? "project"
+      const source = sources().get(id) ?? "unknown"
+      if (source !== "project" && source !== "global") return
       const file = await svc.readAgentFile(id, source)
       const formData: Partial<AgentFormData> = {
         name: id,
@@ -419,7 +442,8 @@ const AgentsContent = () => {
   }
 
   const handleDeleteClick = (id: string) => {
-    const source = sources().get(id) ?? "project"
+    const source = sources().get(id) ?? "unknown"
+    if (source !== "project" && source !== "global") return
     dialogFn.push(() => (
       <DeleteAgentDialog
         agentName={id}
@@ -434,7 +458,7 @@ const AgentsContent = () => {
   const handleCopyPath = async (id: string) => {
     const svc = service()
     const source = selectedSource()
-    if (!svc || source === "built-in") return
+    if (!svc || source === "built-in" || source === "unknown") return
     try {
       const file = await svc.readAgentFile(id, source)
       await navigator.clipboard.writeText(file.path)
@@ -538,7 +562,7 @@ const AgentsContent = () => {
                 <AgentDetail
                   agent={selectedAgent()}
                   source={selectedSource()}
-                  directory={directory()}
+                  sourcePath={selectedSourcePath()}
                   onEdit={() => selectedAgent() && handleEdit(selectedAgent()!.name)}
                   onDelete={() => selectedAgent() && handleDeleteClick(selectedAgent()!.name)}
                   onDuplicate={() => selectedAgent() && handleDuplicate(selectedAgent()!.name)}

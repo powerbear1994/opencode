@@ -125,29 +125,37 @@ function normalizeAgentList(raw: unknown): Agent[] {
 // ── Agent source detection ─────────────────────────────────────────────────────
 
 async function detectSource(base: string, directory: string, agent: Agent, auth: ServerAuth): Promise<AgentSource> {
-  // V2 API does not include a "native" flag — use name-based check instead
+  // File/config definitions can intentionally override a built-in by name, so
+  // check concrete locations before falling back to the name-based built-in set.
+  const exists = async (agentLocation: AgentSource) => {
+    const resp = await fetch(
+      `${base}/api/agent/${encodeURIComponent(agent.name)}?location[directory]=${encodeURIComponent(directory)}&agentLocation=${agentLocation}`,
+      { headers: buildAuthHeaders(auth) },
+    )
+    return resp.ok
+  }
+  try {
+    if (await exists("project")) return "project"
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (await exists("global")) return "global"
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (await exists("project-config")) return "project-config"
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (await exists("global-config")) return "global-config"
+  } catch {
+    /* ignore */
+  }
   if (isBuiltinAgent(agent.name)) return "built-in"
-  // For custom agents, check where the file exists
-  try {
-    const resp = await fetch(
-      `${base}/api/agent/${encodeURIComponent(agent.name)}?location[directory]=${encodeURIComponent(directory)}&agentLocation=project`,
-      { headers: buildAuthHeaders(auth) },
-    )
-    if (resp.ok) return "project"
-  } catch {
-    /* ignore */
-  }
-  try {
-    const resp = await fetch(
-      `${base}/api/agent/${encodeURIComponent(agent.name)}?location[directory]=${encodeURIComponent(directory)}&agentLocation=global`,
-      { headers: buildAuthHeaders(auth) },
-    )
-    if (resp.ok) return "global"
-  } catch {
-    /* ignore */
-  }
-  // If file doesn't exist in either location, it might be from opencode.json config
-  return "project"
+  return "unknown"
 }
 
 // ── API ────────────────────────────────────────────────────────────────────────
@@ -188,12 +196,12 @@ export function createAgentService(auth: ServerAuth, directory: string): AgentSe
         names: agents.map((a) => ({ name: a.name, builtin: isBuiltinAgent(a.name) })),
       })
 
-      // Detect source for non-builtin agents (V2 API has no native flag)
+      // Detect source for every agent because user/project definitions may
+      // override a built-in agent by reusing the same name.
       const sources = new Map<string, AgentSource>()
       let detectFailures = 0
       await Promise.all(
         agents
-          .filter((a) => !isBuiltinAgent(a.name))
           .map(async (agent) => {
             try {
               const source = await detectSource(base, directory, agent, auth)
@@ -201,7 +209,7 @@ export function createAgentService(auth: ServerAuth, directory: string): AgentSe
             } catch (err) {
               detectFailures++
               console.warn(`[agents] Source detection failed for "${agent.name}":`, err)
-              sources.set(agent.name, "project")
+              sources.set(agent.name, isBuiltinAgent(agent.name) ? "built-in" : "unknown")
             }
           }),
       )
@@ -253,6 +261,7 @@ export function createAgentService(auth: ServerAuth, directory: string): AgentSe
           description: data.description || undefined,
           mode: data.mode,
           model: data.model,
+          steps: data.steps || undefined,
           temperature: data.temperature,
           color: data.color,
           hidden: data.hidden,
@@ -276,6 +285,7 @@ export function createAgentService(auth: ServerAuth, directory: string): AgentSe
           description: data.description || undefined,
           mode: data.mode,
           model: data.model,
+          steps: data.steps || undefined,
           temperature: data.temperature,
           color: data.color,
           hidden: data.hidden,

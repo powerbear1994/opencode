@@ -21,7 +21,7 @@ export interface RequirementSkillBindings {
 
 /**
  * Provider abstraction for requirement data access.
- * Requirement data is stored in the selected project's .opencode directory.
+ * Requirement data is stored in the selected project's docs/requirements directory.
  */
 export interface RequirementProvider {
   listRequirements(projectId: string): Promise<RequirementItem[]>

@@ -4,7 +4,6 @@ import type { Agent } from "@opencode-ai/sdk/v2/client"
 import type { AgentSource } from "./types"
 import {
   DEFAULT_PERMISSIONS,
-  isBuiltinAgent,
   MODE_LABELS,
   PERMISSION_ACTION_LABELS,
   PERMISSION_KEYS,
@@ -19,7 +18,7 @@ import {
 interface AgentDetailProps {
   agent: Agent | null
   source: AgentSource
-  directory: string
+  sourcePath?: string
   onEdit: () => void
   onDelete: () => void
   onDuplicate: () => void
@@ -57,7 +56,10 @@ const SourceBadge: Component<{ source: AgentSource }> = (props) => (
     classList={{
       "bg-[var(--v2-blue-400)]/10 text-[var(--v2-blue-500)]": props.source === "project",
       "bg-[var(--v2-green-400)]/10 text-[var(--v2-green-600)]": props.source === "global",
+      "bg-[var(--v2-amber-400)]/10 text-[var(--v2-amber-600)]": props.source === "project-config",
+      "bg-[var(--v2-teal-400)]/10 text-[var(--v2-teal-600)]": props.source === "global-config",
       "bg-[var(--v2-background-bg-layer-02)] text-[var(--v2-text-text-muted)]": props.source === "built-in",
+      "bg-[var(--v2-red-400)]/10 text-[var(--v2-red-600)]": props.source === "unknown",
     }}
   >
     {SOURCE_LABELS[props.source]}
@@ -179,12 +181,14 @@ const mutedDangerButton = () =>
 // ── Component ──────────────────────────────────────────────────────────────────
 
 export const AgentDetail: Component<AgentDetailProps> = (props) => {
-  const isBuiltin = () => isBuiltinAgent(props.agent?.name ?? "")
+  const isBuiltin = () => props.source === "built-in"
+  const isFileBacked = () => props.source === "project" || props.source === "global"
+  const isConfigBacked = () => props.source === "project-config" || props.source === "global-config"
   const [showAdvanced, setShowAdvanced] = createSignal(false)
   const [copied, setCopied] = createSignal(false)
 
   const copyPath = async () => {
-    if (isBuiltin()) return
+    if (isBuiltin() || props.source === "unknown") return
     try {
       await props.onCopyPath()
       setCopied(true)
@@ -228,9 +232,9 @@ export const AgentDetail: Component<AgentDetailProps> = (props) => {
               <p class="mt-1 line-clamp-2 text-[12px] leading-5 text-[var(--v2-text-text-muted)]">
                 {props.agent!.description || "没有描述"}
               </p>
-              <Show when={props.directory}>
-                <p class="mt-1 truncate font-mono text-[10px] text-[var(--v2-text-text-faint)]" title={props.directory}>
-                  {props.directory}
+              <Show when={props.sourcePath}>
+                <p class="mt-1 truncate font-mono text-[10px] text-[var(--v2-text-text-faint)]" title={props.sourcePath}>
+                  {props.sourcePath}
                 </p>
               </Show>
               <p class="mt-1 truncate font-mono text-[10px] text-[var(--v2-text-text-faint)]">
@@ -243,7 +247,12 @@ export const AgentDetail: Component<AgentDetailProps> = (props) => {
               <Show when={isBuiltin()}>
                 <button type="button" class={secondaryButton()} onClick={props.onDuplicate}>复制为自定义</button>
               </Show>
-              <Show when={!isBuiltin()}>
+              <Show when={isConfigBacked()}>
+                <button type="button" class={secondaryButton()} onClick={copyPath}>
+                  {copied() ? "已复制" : "复制路径"}
+                </button>
+              </Show>
+              <Show when={isFileBacked()}>
                 <button type="button" class={secondaryButton()} onClick={copyPath}>
                   {copied() ? "已复制" : "复制路径"}
                 </button>
@@ -258,6 +267,11 @@ export const AgentDetail: Component<AgentDetailProps> = (props) => {
           <Show when={isBuiltin()}>
             <div class="mb-4 rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-3 py-2 text-[12px] text-[var(--v2-text-text-muted)]">
               内置智能体不可直接编辑，可使用「复制为自定义」创建副本后进行自定义。
+            </div>
+          </Show>
+          <Show when={isConfigBacked()}>
+            <div class="mb-4 rounded-[6px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-3 py-2 text-[12px] text-[var(--v2-text-text-muted)]">
+              该智能体来自配置文件，请在加载位置对应的配置文件中修改。
             </div>
           </Show>
 

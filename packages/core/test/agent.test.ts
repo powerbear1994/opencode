@@ -117,14 +117,49 @@ describe("AgentV2", () => {
       expect(agents.map((item) => String(item.id)).sort()).toEqual([
         "build",
         "compaction",
+        "design-agent",
+        "development-agent",
         "explore",
         "general",
         "plan",
+        "requirement-agent",
         "summary",
+        "testing-agent",
         "title",
       ])
-      for (const item of agents) {
+      const workbenchAgents = new Set(["requirement-agent", "design-agent", "development-agent", "testing-agent"])
+      for (const item of agents.filter((agent) => !workbenchAgents.has(agent.id))) {
         expect(item.permissions.some((rule) => rule.action === "bash" && rule.effect !== "deny")).toBe(false)
+      }
+    }),
+  )
+
+  it.effect("registers workbench agents without file-based agent definitions", () =>
+    Effect.gen(function* () {
+      const agent = yield* AgentV2.Service
+      yield* AgentPlugin.Plugin.effect(
+        host({
+          agent: agentHost(agent),
+        }),
+      ).pipe(
+        Effect.provideService(
+          Location.Service,
+          Location.Service.of(location({ directory: AbsolutePath.make("/project") })),
+        ),
+      )
+
+      const workbench = yield* Effect.all([
+        agent.get(AgentV2.ID.make("requirement-agent")),
+        agent.get(AgentV2.ID.make("design-agent")),
+        agent.get(AgentV2.ID.make("development-agent")),
+        agent.get(AgentV2.ID.make("testing-agent")),
+      ])
+
+      for (const item of workbench) {
+        expect(item?.mode).toBe("subagent")
+        expect(item?.hidden).toBe(false)
+        expect(item?.steps).toBe(100)
+        expect(item?.system).toBeTruthy()
       }
     }),
   )

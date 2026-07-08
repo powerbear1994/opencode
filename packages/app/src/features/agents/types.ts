@@ -1,7 +1,7 @@
 import type { Agent } from "@opencode-ai/sdk/v2/client"
 
 /** Where the agent comes from */
-export type AgentSource = "built-in" | "project" | "global"
+export type AgentSource = "built-in" | "project" | "global" | "project-config" | "global-config" | "unknown"
 
 /** Agent save location */
 export type AgentLocation = "project" | "global"
@@ -22,6 +22,7 @@ export interface AgentFormData {
   mode: "subagent" | "primary" | "all"
   description: string
   model: string
+  steps: number
   temperature: number
   color: string
   hidden: boolean
@@ -86,6 +87,10 @@ export const BUILTIN_AGENT_NAMES = new Set([
   "compaction",
   "title",
   "summary",
+  "requirement-agent",
+  "design-agent",
+  "development-agent",
+  "testing-agent",
 ])
 
 /** Check if an agent is built-in */
@@ -99,6 +104,9 @@ export const SOURCE_LABELS: Record<AgentSource, string> = {
   "built-in": "内置",
   project: "项目",
   global: "全局",
+  "project-config": "项目配置",
+  "global-config": "全局配置",
+  unknown: "未知",
 }
 
 export const MODE_LABELS: Record<string, string> = {

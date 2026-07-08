@@ -2,7 +2,7 @@ import { AgentV2 } from "@opencode-ai/core/agent"
 import { Location } from "@opencode-ai/core/location"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
-import { LocationQuery, locationQueryOpenApi, LocationMiddleware } from "./location"
+import { LocationQuery, locationQueryOpenApi, LocationMiddleware } from "../location"
 
 const AgentCreatePayload = Schema.Struct({
   name: Schema.String,
@@ -10,6 +10,7 @@ const AgentCreatePayload = Schema.Struct({
   description: Schema.optional(Schema.String),
   mode: Schema.optional(Schema.Literals(["subagent", "primary", "all"])),
   model: Schema.optional(Schema.String),
+  steps: Schema.optional(Schema.Finite),
   temperature: Schema.optional(Schema.Finite),
   color: Schema.optional(Schema.String),
   hidden: Schema.optional(Schema.Boolean),
@@ -23,6 +24,7 @@ const AgentUpdatePayload = Schema.Struct({
   description: Schema.optional(Schema.String),
   mode: Schema.optional(Schema.Literals(["subagent", "primary", "all"])),
   model: Schema.optional(Schema.String),
+  steps: Schema.optional(Schema.Finite),
   temperature: Schema.optional(Schema.Finite),
   color: Schema.optional(Schema.String),
   hidden: Schema.optional(Schema.Boolean),
@@ -38,7 +40,7 @@ const AgentFileQuery = Schema.Struct({
       workspace: Schema.optional(Schema.String),
     }),
   ),
-  agentLocation: Schema.Literals(["project", "global"]),
+  agentLocation: Schema.Literals(["project", "global", "project-config", "global-config"]),
 })
 
 const AgentFileResponse = Schema.Struct({

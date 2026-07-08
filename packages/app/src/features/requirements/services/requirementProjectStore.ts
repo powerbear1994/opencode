@@ -51,13 +51,16 @@ interface RequirementIndex {
   requirements: RequirementItem[]
 }
 
-const ROOT = ".opencode/requirements"
+const ROOT = "docs/requirements"
+const LEGACY_ROOT = ".opencode/requirements"
 const INDEX_PATH = `${ROOT}/index.json`
+const LEGACY_INDEX_PATH = `${LEGACY_ROOT}/index.json`
 const ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz"
 const ID_RANDOM_LENGTH = 7
 const requirementUpdateQueues = new Map<string, Promise<void>>()
 
 export const requirementMetadataPath = (requirementId: string) => `${ROOT}/${safeRequirementId(requirementId)}.json`
+const legacyRequirementMetadataPath = (requirementId: string) => `${LEGACY_ROOT}/${safeRequirementId(requirementId)}.json`
 
 export function requirementDocuments(requirementId: string) {
   const id = safeRequirementId(requirementId)
@@ -229,7 +232,10 @@ async function readStoredRequirements(input: { server?: ServerConnection.Any; pr
 }
 
 async function readStoredRequirement(input: { server?: ServerConnection.Any; project: string; requirementId: string }) {
-  const value = await readJson(input, requirementMetadataPath(input.requirementId))
+  const value = await readFirstJson(input, [
+    requirementMetadataPath(input.requirementId),
+    legacyRequirementMetadataPath(input.requirementId),
+  ])
   if (!value) return undefined
   return normalizeStoredRequirement(value, input.project, input.requirementId)
 }
@@ -254,7 +260,7 @@ async function readIndexFile(input: { server?: ServerConnection.Any; project: st
 }
 
 async function readRawIndexPayload(input: { server?: ServerConnection.Any; project: string }) {
-  const value = await readJson(input, INDEX_PATH)
+  const value = await readFirstJson(input, [INDEX_PATH, LEGACY_INDEX_PATH])
   const raw = typeof value === "object" && value !== null ? value as Record<string, unknown> : {}
   return {
     raw,
@@ -308,6 +314,14 @@ async function readJson(input: { server?: ServerConnection.Any; project: string 
   } catch {
     return undefined
   }
+}
+
+async function readFirstJson(input: { server?: ServerConnection.Any; project: string }, paths: string[]) {
+  for (const path of paths) {
+    const value = await readJson(input, path)
+    if (value !== undefined) return value
+  }
+  return undefined
 }
 
 async function writeJson(input: { server?: ServerConnection.Any; project: string }, path: string, value: unknown) {
@@ -456,6 +470,7 @@ async function requirementPathExists(input: { server?: ServerConnection.Any; pro
   const documents = requirementDocuments(requirementId)
   const paths = [
     requirementMetadataPath(requirementId),
+    legacyRequirementMetadataPath(requirementId),
     documents.requirement,
     documents.design,
     documents.development,
