@@ -642,7 +642,7 @@ export default function LegacyLayout(props: ParentProps) {
     const result: Session[] = []
     for (const dir of dirs) {
       const [dirStore] = serverSync().child(dir, { bootstrap: true })
-      const dirSessions = sortedRootSessions(dirStore, now)
+      const dirSessions = sortedRootSessions(dirStore, now, dir)
       result.push(...dirSessions)
     }
     return result

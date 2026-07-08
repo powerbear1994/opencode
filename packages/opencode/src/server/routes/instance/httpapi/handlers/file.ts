@@ -65,6 +65,7 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
 
     const list = Effect.fn("FileHttpApi.list")(function* (ctx: { query: { path: string } }) {
       const directory = (yield* InstanceState.context).directory
+      if (!(yield* FSUtil.Service.use((fs) => fs.isDir(directory)))) return []
       return yield* filesystem(
         Effect.gen(function* () {
           const fs = yield* FileSystem.Service
@@ -89,6 +90,13 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
                 (item.type === "directory" ? "/" : ""),
             ),
           }))
+        }),
+      ).pipe(
+        Effect.catchDefect((error) => {
+          if (!isRecoverableListDefect(error)) return Effect.die(error)
+          return Effect.logWarning("failed to list files", { directory, path: ctx.query.path, error }).pipe(
+            Effect.as([]),
+          )
         }),
       )
     })
@@ -137,3 +145,13 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
       .handle("status", status)
   }),
 ).pipe(Layer.provide(locationServiceMapLayer))
+
+function isRecoverableListDefect(error: unknown) {
+  if (error instanceof FSUtil.FileSystemError) return true
+  if (error instanceof Error && error.message === "Path escapes the location") return false
+  if (error instanceof Error) return error.message === "Path is not a directory"
+  if (!error || typeof error !== "object" || !("reason" in error)) return false
+  const reason = error.reason
+  if (!reason || typeof reason !== "object") return false
+  return "_tag" in reason
+}

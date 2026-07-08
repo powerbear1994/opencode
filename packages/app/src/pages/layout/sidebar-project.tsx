@@ -331,10 +331,10 @@ export const SortableProject = (props: {
       })
     }),
   )
-  const projectSessions = createMemo(() => sortedRootSessions(projectStore(), props.sortNow()))
+  const projectSessions = createMemo(() => sortedRootSessions(projectStore(), props.sortNow(), props.project.worktree))
   const workspaceSessions = (directory: string) => {
     const [data] = serverSync().child(directory, { bootstrap: false })
-    return sortedRootSessions(data, props.sortNow())
+    return sortedRootSessions(data, props.sortNow(), directory)
   }
   const tile = () => (
     <ProjectTile

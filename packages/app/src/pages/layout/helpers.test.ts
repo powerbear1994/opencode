@@ -18,6 +18,7 @@ import {
   homeProjectDirectories,
   homeSessionServerStatus,
   latestRootSession,
+  sortedRootSessions,
   toggleHomeProjectSelection,
 } from "./helpers"
 import { pathKey } from "@/utils/path-key"
@@ -151,6 +152,25 @@ describe("layout workspace helpers", () => {
     )
 
     expect(result?.id).toBe("workspace")
+  })
+
+  test("keeps workspace sessions visible with a fallback directory while path metadata is temporarily empty", () => {
+    const result = sortedRootSessions(
+      {
+        path: { directory: "" },
+        session: [
+          session({
+            id: "visible-with-fallback",
+            directory: "/workspace",
+            time: { created: 2, updated: 2, archived: undefined },
+          }),
+        ],
+      },
+      120_000,
+      "/workspace",
+    )
+
+    expect(result.map((item) => item.id)).toEqual(["visible-with-fallback"])
   })
 
   test("detects project permissions with a filter", () => {

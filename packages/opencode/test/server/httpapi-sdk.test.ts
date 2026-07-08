@@ -21,6 +21,7 @@ import type { Config } from "@/config/config"
 import { Session as SessionNs } from "@/session/session"
 import { errorMessage } from "../../src/util/error"
 import { TestLLMServer } from "../lib/llm-server"
+import fs from "fs/promises"
 import path from "path"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, TestInstance, tmpdirScoped } from "../fixture/fixture"
@@ -376,6 +377,19 @@ describe("HttpApi SDK", () => {
           expectStatus(() => sdk.find.files({ query: "hello", limit: 10 }), 200),
         ])
       }),
+  )
+
+  httpapi(
+    "returns an empty file list when the workspace directory disappears",
+    withProject("raw", { setup: writeStandardFiles }, ({ sdk, directory }) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() => fs.rm(directory, { recursive: true, force: true }))
+        const files = yield* capture(() => sdk.file.list({ path: "" }))
+
+        expect(files.status).toBe(200)
+        expect(files.data).toEqual([])
+      }),
+    ),
   )
 
   httpapi(

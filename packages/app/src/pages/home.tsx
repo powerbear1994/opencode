@@ -113,7 +113,9 @@ function buildHomeSessionRecords(input: {
     ...new Map(
       input
         .projectDirectories()
-        .flatMap((directory) => sortedRootSessions(input.sync.child(directory, { bootstrap: false })[0], Date.now()))
+        .flatMap((directory) =>
+          sortedRootSessions(input.sync.child(directory, { bootstrap: false })[0], Date.now(), directory),
+        )
         .map((session) => [`${pathKey(session.directory)}:${session.id}`, session] as const),
     ).values(),
   ]
