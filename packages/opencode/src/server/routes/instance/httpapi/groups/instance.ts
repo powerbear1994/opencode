@@ -79,9 +79,15 @@ export const SkillDeletePayload = Schema.Struct({
   location: Schema.String,
 })
 
+const GenerateModelSelection = Schema.Struct({
+  providerID: Schema.String,
+  modelID: Schema.String,
+})
+
 export const SkillGeneratePayload = Schema.Struct({
   name: Schema.String,
   description: Schema.optional(Schema.String),
+  model: Schema.optional(GenerateModelSelection),
 })
 
 export const SkillGenerateResult = Schema.Struct({
@@ -130,6 +136,7 @@ export const RuleFileResult = Schema.Struct({
 export const AgentGeneratePayload = Schema.Struct({
   name: Schema.String,
   description: Schema.optional(Schema.String),
+  model: Schema.optional(GenerateModelSelection),
 })
 
 export const AgentGenerateResult = Schema.Struct({

@@ -1,5 +1,8 @@
 import { Icon } from "@opencode-ai/ui/icon"
 import { base64Encode } from "@opencode-ai/core/util/encode"
+import { SelectV2 } from "@opencode-ai/ui/v2/select-v2"
+import { Dialog } from "@opencode-ai/ui/dialog"
+import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useNavigate, useParams, useSearchParams } from "@solidjs/router"
 import { createEffect, createMemo, createResource, createSignal, ErrorBoundary, For, Match, onCleanup, Show, Switch, type JSX } from "solid-js"
 import { createStore } from "solid-js/store"
@@ -41,6 +44,12 @@ type InitRecord = {
   startedAt: number
 }
 
+type ModelOption = {
+  value: string
+  label: string
+  provider: string
+}
+
 const INIT_LOCK_TTL = 10 * 60 * 1000
 const INIT_SESSION_CHECK_INTERVAL = 5000
 
@@ -66,6 +75,7 @@ export default function RulesPage() {
 function RulesContent() {
   const server = useServer()
   const serverSDK = useServerSDK()
+  const dialog = useDialog()
   const navigate = useNavigate()
   const params = useParams<{ dir?: string }>()
   const [searchParams] = useSearchParams<{ project?: string }>()
@@ -74,6 +84,7 @@ function RulesContent() {
   const [busy, setBusy] = createSignal(false)
   const [message, setMessage] = createSignal<string>()
   const [actionError, setActionError] = createSignal<string>()
+  const [initModelValue, setInitModelValue] = createSignal("")
   const [initStore, setInitStore] = persisted(
     Persist.serverGlobal(serverSDK().scope, "rules-init-session", ["rules-init-session.v1"]),
     createStore<{ sessions: Record<string, InitRecord | undefined> }>({ sessions: {} }),
@@ -142,7 +153,22 @@ function RulesContent() {
   const projectRules = createMemo(() => orderedRules().filter((rule) => rule.source === "project"))
   const globalRules = createMemo(() => orderedRules().filter((rule) => rule.source === "global"))
   const instructionRules = createMemo(() => orderedRules().filter((rule) => rule.source === "instruction"))
+  const initModelOptions = createMemo<ModelOption[]>(() =>
+    providers
+      .connected()
+      .flatMap((provider) =>
+        Object.values(provider.models).map((model) => ({
+          value: `${provider.id}/${model.id}`,
+          label: model.name,
+          provider: provider.name,
+        })),
+      )
+      .sort((a, b) => a.provider.localeCompare(b.provider) || a.label.localeCompare(b.label)),
+  )
+  const selectedInitModelOption = createMemo(() => initModelOptions().find((option) => option.value === initModelValue()))
   const initModel = createMemo(() => {
+    const selected = modelSelection(initModelValue())
+    if (selected) return selected
     const defaults = providers.default()
     for (const provider of providers.connected()) {
       const configured = defaults[provider.id]
@@ -232,12 +258,19 @@ function RulesContent() {
     }
   }
 
+  const startInit = () => {
+    if (!directory()) {
+      setActionError("请先打开一个项目。")
+      return
+    }
+    dialog.push(() => <InitDialog />)
+  }
+
   const runInit = async () => {
     if (!directory()) {
       setActionError("请先打开一个项目。")
       return
     }
-    if (!window.confirm("接下来会跳转到会话页面，并通过 /init 分析当前项目、生成项目规则。是否继续？")) return
     const model = initModel()
     if (!model) {
       setActionError("当前没有可用模型，无法智能生成项目规则。")
@@ -251,6 +284,7 @@ function RulesContent() {
       const sdk = serverSDK().ensureDirSdkContext(directory())
       const session = await sdk.client.session.create().then((response) => response.data)
       if (!session) throw new Error("无法创建规则生成会话。")
+      dialog.close()
       const record = {
         sessionID: session.id,
         directory: directory(),
@@ -284,7 +318,7 @@ function RulesContent() {
         </div>
         <div class="flex shrink-0 items-center gap-2">
           <Show when={canRunInit()}>
-            <button type="button" onClick={() => void runInit()} disabled={busy() || initActive()} class={primaryButton()}>
+            <button type="button" onClick={startInit} disabled={busy() || initActive()} class={primaryButton()}>
               {initActive() ? "正在智能生成" : "智能生成项目规则"}
             </button>
           </Show>
@@ -380,7 +414,7 @@ function RulesContent() {
                           </p>
                         </Show>
                         <Show when={canRunInit()}>
-                          <button type="button" onClick={() => void runInit()} disabled={busy() || initActive()} class={primaryButton()}>
+                          <button type="button" onClick={startInit} disabled={busy() || initActive()} class={primaryButton()}>
                             {initActive() ? "正在智能生成" : "智能生成项目规则"}
                           </button>
                         </Show>
@@ -412,6 +446,66 @@ function RulesContent() {
       </div>
     </div>
   )
+
+  function InitDialog() {
+    return (
+      <Dialog title="智能生成项目规则" size="large">
+        <div class="flex flex-col gap-5 px-2 pb-2 pt-1">
+          <div class="rounded-[8px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-4 py-3">
+            <div class="flex items-start gap-3">
+              <span class="mt-0.5 inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-[var(--v2-blue-400)]/10 text-[var(--v2-blue-500)]">
+                <Icon name="sliders" size="small" class="size-4" />
+              </span>
+              <div class="min-w-0">
+                <p class="text-[13px] font-[530] text-[var(--v2-text-text-base)]">选择生成模型</p>
+                <p class="mt-0.5 text-[12px] leading-relaxed text-[var(--v2-text-text-muted)]">
+                  将创建新会话并运行 /init 分析当前项目，完成后生成 AGENTS.md。
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <label class="flex flex-col gap-2 rounded-[8px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-00)] px-3 py-2.5">
+            <span class="flex flex-col gap-0.5">
+              <span class="text-[12px] font-[530] text-[var(--v2-text-text-base)]">生成模型</span>
+              <span class="text-[11px] leading-4 text-[var(--v2-text-text-muted)]">
+                选择用于运行 /init 的模型；不选择时使用当前默认模型。
+              </span>
+            </span>
+            <SelectV2
+              appearance="large"
+              placeholder="使用默认模型"
+              options={initModelOptions()}
+              current={selectedInitModelOption()}
+              value={(option) => option.value}
+              label={(option) => `${option.provider} / ${option.label}`}
+              groupBy={(option) => option.provider}
+              onSelect={(option) => setInitModelValue(option?.value ?? "")}
+              disabled={busy() || initActive()}
+              style={{ width: "100%" }}
+            />
+          </label>
+
+          <Show when={actionError()}>
+            {(value) => (
+              <div class="rounded-[6px] border border-[var(--v2-red-400)]/40 bg-[var(--v2-red-400)]/10 px-3 py-2 text-[12px] text-[var(--v2-text-text-base)]">
+                {value()}
+              </div>
+            )}
+          </Show>
+
+          <div class="flex items-center justify-end gap-2.5 border-t border-[var(--v2-border-border-base)] pt-5">
+            <button type="button" onClick={() => dialog.close()} disabled={busy()} class={secondaryButton()}>
+              取消
+            </button>
+            <button type="button" onClick={() => void runInit()} disabled={busy() || initActive() || !initModel()} class={primaryButton()}>
+              {busy() ? "正在开始" : "开始生成"}
+            </button>
+          </div>
+        </div>
+      </Dialog>
+    )
+  }
 }
 
 function RuleStackGroup(props: { title: string; children: JSX.Element }) {
@@ -520,6 +614,13 @@ function secondaryButton() {
 
 function primaryButton() {
   return "inline-flex h-8 items-center gap-1.5 rounded-[6px] bg-[var(--v2-text-text-base)] px-3 text-[12px] font-[530] text-[var(--v2-background-bg-base)] transition-opacity hover:opacity-90 disabled:opacity-50"
+}
+
+function modelSelection(value: string) {
+  const [providerID, ...modelParts] = value.split("/")
+  const modelID = modelParts.join("/")
+  if (!providerID || !modelID) return undefined
+  return { providerID, modelID }
 }
 
 function requestRule<T>(

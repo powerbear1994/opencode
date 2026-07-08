@@ -29,7 +29,7 @@ import path from "path"
 import { rm } from "fs/promises"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { LLM } from "@/session/llm"
-import { Provider } from "@/provider/provider"
+import { Provider, parseModel } from "@/provider/provider"
 import { LLMEvent } from "@opencode-ai/llm"
 import { MessageID, SessionID } from "@/session/schema"
 
@@ -464,6 +464,20 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
       return found
     })
 
+    const resolveGenerateModel = Effect.fn("InstanceHttpApi.generate.resolveModel")(function* (
+      selection?: { providerID: string; modelID: string },
+    ) {
+      const selected = selection
+        ? parseModel(`${selection.providerID}/${selection.modelID}`)
+        : yield* provider.defaultModel().pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+      if (!selected) return yield* Effect.fail(skillError("invalid", "No AI model is configured."))
+      return yield* provider.getModel(selected.providerID, selected.modelID).pipe(
+        Effect.catchCause(() =>
+          Effect.fail(skillError("invalid", "Failed to find an available AI model.")),
+        ),
+      )
+    })
+
     const getRuleFile = Effect.fn("InstanceHttpApi.ruleFile")(function* (ctx: { query: { id: string } }) {
       const rule = yield* findRule(ctx.query.id)
       if (!rule.exists) return yield* Effect.fail(skillError("missing", "Rule file does not exist yet."))
@@ -523,16 +537,7 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
       const description = ctx.payload.description?.trim() || ""
       if (description.length < 20) return yield* Effect.fail(skillError("invalid", "Agent requirements must be at least 20 characters."))
 
-      const fallback = yield* provider.defaultModel().pipe(
-        Effect.catchCause(() => Effect.succeed(undefined)),
-      )
-      if (!fallback) return yield* Effect.fail(skillError("invalid", "No AI model is configured."))
-
-      const model = yield* provider.getModel(fallback.providerID, fallback.modelID).pipe(
-        Effect.catchCause(() =>
-          Effect.fail(skillError("invalid", "Failed to find an available AI model.")),
-        ),
-      )
+      const model = yield* resolveGenerateModel(ctx.payload.model)
 
       const system = [
         "You generate custom agent drafts for an AI coding assistant.",
@@ -783,16 +788,7 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
 
       const description = ctx.payload.description?.trim() || ""
 
-      const fallback = yield* provider.defaultModel().pipe(
-        Effect.catchCause(() => Effect.succeed(undefined)),
-      )
-      if (!fallback) return yield* Effect.fail(skillError("invalid", "No AI model is configured."))
-
-      const model = yield* provider.getModel(fallback.providerID, fallback.modelID).pipe(
-        Effect.catchCause(() =>
-          Effect.fail(skillError("invalid", "Failed to find an available AI model.")),
-        ),
-      )
+      const model = yield* resolveGenerateModel(ctx.payload.model)
 
       const system = [
         "You generate SKILL.md drafts for an AI coding assistant.",

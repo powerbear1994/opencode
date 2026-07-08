@@ -6,7 +6,9 @@ import { useLanguage } from "@/context/language"
 import { showToast } from "@/utils/toast"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { Dialog } from "@opencode-ai/ui/dialog"
+import { SelectV2 } from "@opencode-ai/ui/v2/select-v2"
 import { decode64 } from "@/utils/base64"
+import { useModels } from "@/context/models"
 import type { AgentSource, AgentFormData } from "./types"
 import { isBuiltinAgent } from "./types"
 import { createAgentService, type AgentService, type ServerAuth } from "./agent-service"
@@ -17,6 +19,11 @@ import { DeleteAgentDialog } from "./delete-dialog"
 
 const MIN_SMART_DESCRIPTION_LENGTH = 20
 type AgentListResult = Awaited<ReturnType<AgentService["listAgents"]>>
+type ModelOption = {
+  value: string
+  label: string
+  provider: string
+}
 
 // ── Error fallback ─────────────────────────────────────────────────────────────
 
@@ -41,6 +48,7 @@ const AgentsContent = () => {
   const server = useServer()
   const serverSDK = useServerSDK()
   const language = useLanguage()
+  const models = useModels()
   const dialogFn = useDialog()
   const params = useParams<{ dir?: string }>()
   const [searchParams] = useSearchParams<{ project?: string }>()
@@ -52,6 +60,7 @@ const AgentsContent = () => {
   const [editorInitialData, setEditorInitialData] = createSignal<Partial<AgentFormData> | undefined>()
   const [smartName, setSmartName] = createSignal("")
   const [smartDescription, setSmartDescription] = createSignal("")
+  const [smartModel, setSmartModel] = createSignal("")
   const [smartGenerating, setSmartGenerating] = createSignal(false)
   const [smartError, setSmartError] = createSignal<string>()
 
@@ -116,6 +125,18 @@ const AgentsContent = () => {
       .slice()
       .sort((a, b) => sourceOrder[agentSource(a.name)] - sourceOrder[agentSource(b.name)] || a.name.localeCompare(b.name)),
   )
+  const smartModelOptions = createMemo<ModelOption[]>(() =>
+    models
+      .list()
+      .filter((model) => models.visible({ providerID: model.provider.id, modelID: model.id }))
+      .map((model) => ({
+        value: `${model.provider.id}/${model.id}`,
+        label: model.name,
+        provider: model.provider.name,
+      }))
+      .sort((a, b) => a.provider.localeCompare(b.provider) || a.label.localeCompare(b.label)),
+  )
+  const selectedSmartModel = createMemo(() => smartModelOptions().find((option) => option.value === smartModel()))
   const counts = createMemo(() => {
     const list = agents()
     return {
@@ -222,6 +243,7 @@ const AgentsContent = () => {
   const startSmartCreate = () => {
     setSmartName("")
     setSmartDescription("")
+    setSmartModel("")
     setSmartError(undefined)
     setSmartGenerating(false)
     dialogFn.push(() => <SmartCreateDialog />)
@@ -243,13 +265,14 @@ const AgentsContent = () => {
     setSmartGenerating(true)
     setSmartError(undefined)
     try {
-      const generated = await svc.generateAgent({ name, description })
+      const generated = await svc.generateAgent({ name, description, model: modelSelection(smartModel()) })
       setSelectedId(null)
       setEditorInitialData({
         name: generated.name || name,
         location: hasProject() ? "project" : "global",
         description: generated.description,
         mode: generated.mode,
+        model: smartModel(),
         prompt: generated.prompt,
       })
       dialogFn.close()
@@ -408,6 +431,26 @@ const AgentsContent = () => {
                 <span class="text-[11px] text-[var(--v2-text-text-faint)]">
                   至少 {MIN_SMART_DESCRIPTION_LENGTH} 个字符
                 </span>
+              </label>
+
+              <label class="flex flex-col gap-2 rounded-[8px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-00)] px-3 py-2.5">
+                <span class="flex flex-col gap-0.5">
+                  <span class="text-[12px] font-[530] text-[var(--v2-text-text-base)]">生成模型</span>
+                  <span class="text-[11px] leading-4 text-[var(--v2-text-text-muted)]">
+                    仅用于生成这份智能体草稿；保存后的智能体模型可在创建表单里继续调整。
+                  </span>
+                </span>
+                <SelectV2
+                  appearance="large"
+                  placeholder="使用默认模型"
+                  options={smartModelOptions()}
+                  current={selectedSmartModel()}
+                  value={(option) => option.value}
+                  label={(option) => `${option.provider} / ${option.label}`}
+                  groupBy={(option) => option.provider}
+                  onSelect={(option) => setSmartModel(option?.value ?? "")}
+                  style={{ width: "100%" }}
+                />
               </label>
             </Show>
           </div>
@@ -599,4 +642,11 @@ export default function SettingsAgents() {
       <AgentsContent />
     </ErrorBoundary>
   )
+}
+
+function modelSelection(value: string) {
+  const [providerID, ...modelParts] = value.split("/")
+  const modelID = modelParts.join("/")
+  if (!providerID || !modelID) return undefined
+  return { providerID, modelID }
 }

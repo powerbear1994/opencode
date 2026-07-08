@@ -163,7 +163,11 @@ async function detectSource(base: string, directory: string, agent: Agent, auth:
 export interface AgentService {
   listAgents(): Promise<{ agents: Agent[]; sources: Map<string, AgentSource>; debug: any }>
   readAgentFile(id: string, location: string): Promise<AgentFileContent>
-  generateAgent(input: { name: string; description: string }): Promise<Pick<AgentFormData, "name" | "description" | "mode" | "prompt">>
+  generateAgent(input: {
+    name: string
+    description: string
+    model?: { providerID: string; modelID: string }
+  }): Promise<Pick<AgentFormData, "name" | "description" | "mode" | "prompt">>
   createAgent(data: AgentFormData): Promise<{ name: string; path: string }>
   updateAgent(id: string, data: AgentFormData): Promise<{ name: string; path: string }>
   deleteAgent(id: string, location: string): Promise<void>
@@ -240,7 +244,11 @@ export function createAgentService(auth: ServerAuth, directory: string): AgentSe
       return data
     },
 
-    async generateAgent(input: { name: string; description: string }) {
+    async generateAgent(input: {
+      name: string
+      description: string
+      model?: { providerID: string; modelID: string }
+    }) {
       const url = new URL("/agent/generate", `${base}/`)
       if (directory) url.searchParams.set("directory", directory)
       return apiPostRaw<Pick<AgentFormData, "name" | "description" | "mode" | "prompt">>(

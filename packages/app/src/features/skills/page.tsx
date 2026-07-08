@@ -2,6 +2,7 @@ import { Icon } from "@opencode-ai/ui/icon"
 import { Markdown } from "@opencode-ai/session-ui/markdown"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
+import { SelectV2 } from "@opencode-ai/ui/v2/select-v2"
 import {
   createEffect,
   createMemo,
@@ -17,6 +18,7 @@ import {
 import { useParams, useSearchParams } from "@solidjs/router"
 import { useServerSDK } from "@/context/server-sdk"
 import { ServerConnection, useServer } from "@/context/server"
+import { useModels } from "@/context/models"
 import { authTokenFromCredentials } from "@/utils/server"
 import { decode64 } from "@/utils/base64"
 import {
@@ -49,6 +51,11 @@ type DraftSkillFile = {
 
 type SkillCreateSource = "project" | "global"
 type DetailMode = "view" | "edit" | "create"
+type ModelOption = {
+  value: string
+  label: string
+  provider: string
+}
 
 const DEFAULT_CREATE_BODY = [
   "# 使用方式",
@@ -96,6 +103,7 @@ function SkillsContent() {
   const serverSDK = useServerSDK()
   const server = useServer()
   const dialog = useDialog()
+  const models = useModels()
   const [selected, setSelected] = createSignal<string>()
   const [query, setQuery] = createSignal("")
   const [source, setSource] = createSignal<SkillSourceFilter>("all")
@@ -115,6 +123,7 @@ function SkillsContent() {
   const [actionError, setActionError] = createSignal<string>()
   const [smartName, setSmartName] = createSignal("")
   const [smartDescription, setSmartDescription] = createSignal("")
+  const [smartModel, setSmartModel] = createSignal("")
   const [smartGenerating, setSmartGenerating] = createSignal(false)
   const [smartError, setSmartError] = createSignal<string>()
   const [newFileName, setNewFileName] = createSignal("")
@@ -149,6 +158,18 @@ function SkillsContent() {
     }
   })
   const selectedSkill = createMemo(() => filtered().find((skill) => skill.name === selected()) ?? filtered()[0])
+  const smartModelOptions = createMemo<ModelOption[]>(() =>
+    models
+      .list()
+      .filter((model) => models.visible({ providerID: model.provider.id, modelID: model.id }))
+      .map((model) => ({
+        value: `${model.provider.id}/${model.id}`,
+        label: model.name,
+        provider: model.provider.name,
+      }))
+      .sort((a, b) => a.provider.localeCompare(b.provider) || a.label.localeCompare(b.label)),
+  )
+  const selectedSmartModel = createMemo(() => smartModelOptions().find((option) => option.value === smartModel()))
 
   const [skillFile, { refetch: refetchSkillFile }] = createResource(
     () => {
@@ -228,6 +249,7 @@ function SkillsContent() {
   const startSmartCreate = () => {
     setSmartName("")
     setSmartDescription("")
+    setSmartModel("")
     setSmartError(undefined)
     setSmartGenerating(false)
     dialog.push(() => <SmartCreateDialog />)
@@ -362,6 +384,7 @@ function SkillsContent() {
         payload: {
           name,
           description,
+          model: modelSelection(smartModel()),
         },
       })
       if (!result?.content) {
@@ -535,6 +558,26 @@ function SkillsContent() {
               <span class="text-[11px] text-[var(--v2-text-text-faint)]">
                 至少 {MIN_SMART_DESCRIPTION_LENGTH} 个字符
               </span>
+            </label>
+
+            <label class="flex flex-col gap-2 rounded-[8px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-00)] px-3 py-2.5">
+              <span class="flex flex-col gap-0.5">
+                <span class="text-[12px] font-[530] text-[var(--v2-text-text-base)]">生成模型</span>
+                <span class="text-[11px] leading-4 text-[var(--v2-text-text-muted)]">
+                  仅用于生成这份技能草稿；不选择时使用默认模型。
+                </span>
+              </span>
+              <SelectV2
+                appearance="large"
+                placeholder="使用默认模型"
+                options={smartModelOptions()}
+                current={selectedSmartModel()}
+                value={(option) => option.value}
+                label={(option) => `${option.provider} / ${option.label}`}
+                groupBy={(option) => option.provider}
+                onSelect={(option) => setSmartModel(option?.value ?? "")}
+                style={{ width: "100%" }}
+              />
             </label>
             </Show>
           </div>
@@ -1484,6 +1527,13 @@ function secondaryButton() {
 
 function primaryButton() {
   return "inline-flex h-8 items-center gap-1.5 rounded-[6px] bg-[var(--v2-text-text-base)] px-3 text-[12px] font-[530] text-[var(--v2-background-bg-base)] transition-opacity hover:opacity-90 disabled:opacity-50"
+}
+
+function modelSelection(value: string) {
+  const [providerID, ...modelParts] = value.split("/")
+  const modelID = modelParts.join("/")
+  if (!providerID || !modelID) return undefined
+  return { providerID, modelID }
 }
 
 function requestSkill<T>(
