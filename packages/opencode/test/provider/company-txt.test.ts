@@ -172,6 +172,98 @@ describe("company-txt provider", () => {
     }
   })
 
+  test("returns upstream failed detail for non-streaming responses", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-upstream-failed" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          return new Response(
+            ["event: failed", 'data: {"content":"context length exceeded after 15 rounds"}', ""].join("\n"),
+            { headers: { "content-type": "text/event-stream" } },
+          )
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      const response = await createCompanyTxtFetch(provider(server.url.origin))(
+        "http://company-txt.local/v1/chat/completions",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "qwen3-coder",
+            messages: [{ role: "user", content: "continue" }],
+          }),
+        },
+      )
+      const body = (await response.json()) as { error: { message: string; code: string } }
+
+      expect(response.status).toBe(502)
+      expect(body.error.code).toBe("upstream_error")
+      expect(body.error.message).toContain("context length exceeded after 15 rounds")
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+  test("streams upstream failed detail and terminates", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/chatabc/init_session") {
+          return Response.json({ resCode: "FAIAG0000", data: { session_id: "session-stream-upstream-failed" } })
+        }
+        if (url.pathname === "/chatabc/chat") {
+          return new Response(
+            [
+              "event: chunk",
+              'data: {"content":"partial"}',
+              "",
+              "event: failed",
+              'data: {"resMessage":"kimi context window exceeded"}',
+              "",
+              "event: chunk",
+              'data: {"content":"ignored"}',
+              "",
+            ].join("\n"),
+            { headers: { "content-type": "text/event-stream" } },
+          )
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+
+    try {
+      const response = await createCompanyTxtFetch(provider(server.url.origin))(
+        "http://company-txt.local/v1/chat/completions",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "qwen3-coder",
+            stream: true,
+            messages: [{ role: "user", content: "continue" }],
+          }),
+        },
+      )
+      const text = await response.text()
+      const events = sseEvents(text)
+
+      expect(events.some((event) => event.error?.message.includes("kimi context window exceeded"))).toBe(true)
+      expect(text).toContain("data: [DONE]")
+      expect(text).not.toContain("ignored")
+    } finally {
+      await server.stop(true)
+    }
+  })
+
   test("preserves raw data payload boundary newlines", async () => {
     const server = Bun.serve({
       port: 0,

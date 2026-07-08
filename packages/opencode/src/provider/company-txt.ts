@@ -646,8 +646,11 @@ async function streamResponse(
 
       for await (const event of iterator) {
         if (event.event === "failed") {
-          controller.enqueue(encoder.encode(sse({ error: { message: "company-txt upstream failed" } })))
-          continue
+          controller.enqueue(encoder.encode(sse({ error: { message: companyTxtUpstreamErrorMessage(event.data) } })))
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"))
+          controller.close()
+          decoder.decode()
+          return
         }
         const content = contentOption(event.data.content)
         if (content === undefined) continue
@@ -729,8 +732,10 @@ async function streamLiveDelta(
 
   for await (const event of input.iterator) {
     if (event.event === "failed") {
-      controller.enqueue(input.encoder.encode(sse({ error: { message: "company-txt upstream failed" } })))
-      continue
+      controller.enqueue(input.encoder.encode(sse({ error: { message: companyTxtUpstreamErrorMessage(event.data) } })))
+      controller.enqueue(input.encoder.encode("data: [DONE]\n\n"))
+      controller.close()
+      return
     }
     const content = contentOption(event.data.content)
     if (content === undefined) continue
@@ -799,6 +804,12 @@ async function collectCompletion(
   const chunks: string[] = []
   let messageContent: string | undefined
   for await (const event of iterateCompanyEvents(body)) {
+    if (event.event === "failed") {
+      throw new CompanyTxtRequestError(companyTxtUpstreamErrorMessage(event.data), {
+        code: "upstream_error",
+        status: 502,
+      })
+    }
     const content = contentOption(event.data.content)
     if (content === undefined) continue
     if (event.event === "message") {
@@ -848,6 +859,18 @@ async function* iterateCompanyEvents(body: ReadableStream<Uint8Array>): AsyncGen
     const event = parseCompanyEvent(buffer)
     yield event
   }
+}
+
+function companyTxtUpstreamErrorMessage(data: Record<string, unknown>) {
+  const detail =
+    stringOption(data.content) ??
+    stringOption(data.message) ??
+    stringOption(data.resMessage) ??
+    stringOption(data.error) ??
+    stringOption(data.code) ??
+    stringOption(data.resCode)
+  if (!detail) return "company-txt upstream failed"
+  return `company-txt upstream failed: ${detail}`
 }
 
 function parseCompanyEvent(block: string): CompanyStreamEvent {
