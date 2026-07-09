@@ -248,6 +248,37 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
     },
   })
 
+  const refreshAgents = async (directory?: string): Promise<void> => {
+    if (!directory) {
+      await Promise.all(Object.keys(children.children).map((item) => refreshAgents(item)))
+      return
+    }
+    const key = directoryKey(directory)
+    const [, setStore] = children.child(key, { bootstrap: false })
+    await queryClient.invalidateQueries(queryOptionsApi.agents(key))
+    const data = await queryClient.fetchQuery(queryOptionsApi.agents(key))
+    setStore("agent", reconcile(data))
+  }
+
+  const refreshCommands = async (directory?: string): Promise<void> => {
+    if (!directory) {
+      await Promise.all(Object.keys(children.children).map((item) => refreshCommands(item)))
+      return
+    }
+    const key = directoryKey(directory)
+    const [, setStore] = children.child(key, { bootstrap: false })
+    const data = await retry(() => sdkFor(key).command.list().then((x) => x.data ?? []))
+    setStore("command", reconcile(data))
+  }
+
+  const reloadAgents = async (directory?: string): Promise<void> => {
+    await refreshAgents(directory)
+  }
+
+  const reloadSkills = async (directory?: string): Promise<void> => {
+    await refreshCommands(directory)
+  }
+
   async function loadSessions(directory: string, options?: { limit?: number }) {
     const key = directoryKey(directory)
     const pending = sessionLoads.get(key)
@@ -481,6 +512,10 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
     child: children.child,
     peek: children.peek,
     disableMcp: children.disableMcp,
+    refreshAgents,
+    refreshCommands,
+    reloadAgents,
+    reloadSkills,
     queryOptions: queryOptionsApi,
     // bootstrap,
     updateConfig: updateConfigMutation.mutateAsync,

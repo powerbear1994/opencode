@@ -1,7 +1,8 @@
 import { createEffect, createMemo, createResource, createSignal, Show, ErrorBoundary } from "solid-js"
 import { useParams, useSearchParams } from "@solidjs/router"
-import { useServer } from "@/context/server"
+import { ServerConnection, useServer } from "@/context/server"
 import { useServerSDK } from "@/context/server-sdk"
+import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
 import { showToast } from "@/utils/toast"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
@@ -18,7 +19,11 @@ import { AgentEditor } from "./editor"
 import { DeleteAgentDialog } from "./delete-dialog"
 
 const MIN_SMART_DESCRIPTION_LENGTH = 20
-type AgentListResult = Awaited<ReturnType<AgentService["listAgents"]>>
+type AgentServiceListResult = Awaited<ReturnType<AgentService["listAgents"]>>
+type AgentListResult = AgentServiceListResult & {
+  directory: string
+  serverKey: string
+}
 type ModelOption = {
   value: string
   label: string
@@ -47,6 +52,7 @@ function ErrorFallback(err: Error, reset: () => void) {
 const AgentsContent = () => {
   const server = useServer()
   const serverSDK = useServerSDK()
+  const serverSync = useServerSync()
   const language = useLanguage()
   const models = useModels()
   const dialogFn = useDialog()
@@ -69,6 +75,7 @@ const AgentsContent = () => {
     if (params.dir) return decode64(params.dir) ?? ""
     return searchParams.project ?? ""
   })
+  const serverKey = createMemo(() => (server.current ? ServerConnection.key(server.current) : ""))
 
   const hasProject = () => (directory() ?? "").length > 0
 
@@ -80,18 +87,21 @@ const AgentsContent = () => {
 
   // ── Service ──────────────────────────────────────────────────────────────
 
-  const [service, setService] = createSignal<AgentService | null>(null)
-
-  createEffect(() => {
+  const service = createMemo<AgentService | null>(() => {
     const auth = serverAuth()
-    if (auth.url) setService(createAgentService(auth, directory()))
+    if (!auth.url) return null
+    return createAgentService(auth, directory())
   })
 
   // ── Data ─────────────────────────────────────────────────────────────────
 
   const [data, { refetch, mutate }] = createResource(
-    () => service(),
-    async (svc) => svc.listAgents(),
+    () => {
+      const svc = service()
+      if (!svc) return
+      return { svc, directory: directory(), serverKey: serverKey() }
+    },
+    loadAgents,
   )
 
   createEffect(() => {
@@ -101,11 +111,13 @@ const AgentsContent = () => {
 
   const agents = () => {
     const val = data()
+    if (val?.directory !== directory() || val.serverKey !== serverKey()) return []
     if (!val || !Array.isArray(val.agents)) return []
     return val.agents
   }
   const sources = () => {
     const val = data()
+    if (val?.directory !== directory() || val.serverKey !== serverKey()) return new Map<string, AgentSource>()
     if (!val || !(val.sources instanceof Map)) return new Map<string, AgentSource>()
     return val.sources
   }
@@ -178,8 +190,13 @@ const AgentsContent = () => {
       return { svc, id: agent.name, source }
     },
     async (input) => {
-      const file = await input.svc.readAgentFile(input.id, input.source)
-      return file.path
+      try {
+        const file = await input.svc.readAgentFile(input.id, input.source)
+        return file.path
+      } catch (err) {
+        console.warn("[agents] Failed to read selected agent source path", err)
+        return undefined
+      }
     },
   )
 
@@ -215,10 +232,12 @@ const AgentsContent = () => {
   }
 
   const refreshAgents = async (options: { expectedName?: string; removedName?: string; fallback?: AgentListResult } = {}) => {
+    await serverSync().refreshAgents(directory() || undefined)
     const first = await refetch()
     if (refreshReady(first, options)) return true
     // 一次快速重试，处理服务端写入延迟
     await delay(150)
+    await serverSync().refreshAgents(directory() || undefined)
     const second = await refetch()
     return refreshReady(second, options)
   }
@@ -230,6 +249,10 @@ const AgentsContent = () => {
       console.error("[agents] Failed to refresh agent data after mutation", err)
       return false
     }
+  }
+
+  const reloadAgentInstances = async () => {
+    await serverSync().reloadAgents(directory() || undefined)
   }
 
   // ── Handlers ─────────────────────────────────────────────────────────────
@@ -355,6 +378,7 @@ const AgentsContent = () => {
       } else {
         savedName = (await svc.updateAgent(formData.name, formData)).name
       }
+      await reloadAgentInstances()
     } catch (err) {
       showToast({ variant: "error", title: "保存失败", description: err instanceof Error ? err.message : String(err) })
       return
@@ -522,6 +546,7 @@ const AgentsContent = () => {
     const optimistic = withoutAgent(beforeDelete, id)
     try {
       await svc.deleteAgent(id, source)
+      await reloadAgentInstances()
       if (optimistic) mutate(optimistic)
       if (selectedId() === id) setSelectedId(null)
       const synced = await refreshAfterMutation({ removedName: id, fallback: beforeDelete })
@@ -574,7 +599,7 @@ const AgentsContent = () => {
             counts={counts()}
             selectedId={selectedId() ?? selectedAgent()?.name ?? null}
             loading={data.loading}
-            error={data.error ? String(data.error) : null}
+            error={!data.loading && data.error ? String(data.error) : null}
             search={search()}
             sourceFilter={sourceFilter()}
             hasProject={hasProject()}
@@ -642,6 +667,14 @@ export default function SettingsAgents() {
       <AgentsContent />
     </ErrorBoundary>
   )
+}
+
+async function loadAgents(input: { svc: AgentService; directory: string; serverKey: string }): Promise<AgentListResult> {
+  return {
+    ...(await input.svc.listAgents()),
+    directory: input.directory,
+    serverKey: input.serverKey,
+  }
 }
 
 function modelSelection(value: string) {

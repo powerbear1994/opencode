@@ -316,6 +316,7 @@ const layer = Layer.effect(
     })
 
     const reload = Effect.fn("Skill.reload")(function* () {
+      yield* config.invalidate()
       yield* InstanceState.invalidate(discovered)
       yield* InstanceState.invalidate(state)
       yield* InstanceState.get(state)

@@ -15,7 +15,8 @@ const trimTrailingSlashes = (value: string) => {
 
 const isWindowsPath = (value: string) => value[1] === ":" || value.startsWith("\\\\")
 
-export const pathKey = (path: string) => {
+export const pathKey = (path: string | null | undefined) => {
+  if (typeof path !== "string") return "" as PathKey
   const value = isWindowsPath(path) ? path.replaceAll("\\", "/") : path
   const trimmed = trimTrailingSlashes(value)
   if (!trimmed && value.startsWith("/")) return "/" as PathKey

@@ -5,6 +5,7 @@ import {
   createMemo,
   createResource,
   createRoot,
+  createSignal,
   For,
   Match,
   on,
@@ -74,6 +75,7 @@ const HOME_SESSION_HEADER_STICKY_TOP = 12
 const HOME_SESSION_HEADER_TEXT_HEIGHT = 16
 const HOME_SESSION_HEADER_FADE_DISTANCE = 16
 const SHOW_HOME_SESSION_ARCHIVE = false
+const authLogoutEvent = "opencode:auth-logout"
 const HOME_ROW_LAYOUT =
   "flex min-w-0 w-full shrink-0 cursor-default items-center rounded-[6px] bg-transparent text-left transition-[background-color,color,box-shadow] duration-[120ms] ease-in-out focus-visible:outline-none"
 const HOME_ROW_BASE = `${HOME_ROW_LAYOUT} border-0`
@@ -270,12 +272,22 @@ export function NewHome() {
   const notification = useNotification()
   const marked = useMarked()
   const openSettings = useSettingsCommand()
+  const [authLogout, setAuthLogout] = createSignal<(() => void) | undefined>()
   let focusSessionSearch: (() => void) | undefined
   const [state, setState] = createStore({
     search: "",
     searchFocused: false,
   })
   const selection = layout.home.selection
+
+  onMount(() => {
+    setAuthLogout(() => (window as typeof window & { __OPENCODE_AUTH_LOGOUT__?: () => void }).__OPENCODE_AUTH_LOGOUT__)
+    const updateAuthLogout = (event: Event) => {
+      setAuthLogout(() => (event as CustomEvent<{ logout?: () => void }>).detail.logout)
+    }
+    window.addEventListener(authLogoutEvent, updateAuthLogout)
+    onCleanup(() => window.removeEventListener(authLogoutEvent, updateAuthLogout))
+  })
 
   const focusedServer = createMemo(
     () => global.servers.list().find((conn) => ServerConnection.key(conn) === selection().server) ?? server.current,
@@ -567,6 +579,11 @@ export function NewHome() {
           unseenCount={unseenCount}
           openSettings={openSettings}
           openHelp={() => platform.openLink("https://opencode.ai/desktop-feedback")}
+          openWorkbench={() => {
+            const project = selectedProject()
+            navigate(project ? `/workbench?project=${encodeURIComponent(project.worktree)}` : "/workbench")
+          }}
+          logout={authLogout()}
           language={language}
         />
 
@@ -659,6 +676,11 @@ export function NewHome() {
           class="flex lg:hidden"
           openSettings={openSettings}
           openHelp={() => platform.openLink("https://opencode.ai/desktop-feedback")}
+          openWorkbench={() => {
+            const project = selectedProject()
+            navigate(project ? `/workbench?project=${encodeURIComponent(project.worktree)}` : "/workbench")
+          }}
+          logout={authLogout()}
           language={language}
         />
       </div>
@@ -682,6 +704,8 @@ function HomeProjectColumn(props: {
   unseenCount: (server: ServerConnection.Any, project: LocalProject) => number
   openSettings: () => void
   openHelp: () => void
+  openWorkbench: () => void
+  logout?: () => void
   language: ReturnType<typeof useLanguage>
 }) {
   const global = useGlobal()
@@ -782,6 +806,8 @@ function HomeProjectColumn(props: {
         class="mb-8 mt-4 hidden shrink-0 lg:flex"
         openSettings={props.openSettings}
         openHelp={props.openHelp}
+        openWorkbench={props.openWorkbench}
+        logout={props.logout}
         language={props.language}
       />
     </aside>
@@ -792,10 +818,20 @@ function HomeUtilityNav(props: {
   class?: string
   openSettings: () => void
   openHelp: () => void
+  openWorkbench: () => void
+  logout?: () => void
   language: ReturnType<typeof useLanguage>
 }) {
   return (
     <div class={`${props.class ?? ""} min-w-0 flex-col gap-1`}>
+      <button
+        type="button"
+        class={`${HOME_PROJECT_NAV_ROW} text-v2-text-text-faint [&>[data-slot=icon-svg]]:text-v2-icon-icon-muted`}
+        onClick={props.openWorkbench}
+      >
+        <IconV2 name="review" size="small" />
+        <span class={HOME_PROJECT_NAV_LABEL}>AI 工作台</span>
+      </button>
       <button
         type="button"
         class={`${HOME_PROJECT_NAV_ROW} text-v2-text-text-faint [&>[data-slot=icon-svg]]:text-v2-icon-icon-muted`}
@@ -812,6 +848,16 @@ function HomeUtilityNav(props: {
         <IconV2 name="help" size="small" />
         <span class={HOME_PROJECT_NAV_LABEL}>{props.language.t("sidebar.help")}</span>
       </button>
+      <Show when={props.logout}>
+        <button
+          type="button"
+          class={`${HOME_PROJECT_NAV_ROW} text-v2-text-text-faint [&>[data-slot=icon-svg]]:text-v2-icon-icon-muted`}
+          onClick={() => props.logout?.()}
+        >
+          <IconV2 name="logout" size="small" />
+          <span class={HOME_PROJECT_NAV_LABEL}>登出</span>
+        </button>
+      </Show>
     </div>
   )
 }

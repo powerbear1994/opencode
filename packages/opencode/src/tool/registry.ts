@@ -262,6 +262,7 @@ const layer = Layer.effect(
       agent: Agent.Info,
       bypassAgentCheck?: boolean,
     ) {
+      yield* agents.reload()
       const items = (yield* agents.list()).filter((item) => item.mode !== "primary")
       const filtered = bypassAgentCheck
         ? items

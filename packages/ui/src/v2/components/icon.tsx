@@ -69,6 +69,10 @@ const icons = {
     viewBox: "0 0 16 16",
     body: `<path d="M7.99998 1.3335L14 4.66683V11.3335L7.99998 14.6668L2 11.3335V4.66683L7.99998 1.3335Z" stroke="currentColor"/><path d="M9.99998 8.00016C9.99998 9.10476 9.10458 10.0002 7.99998 10.0002C6.89538 10.0002 5.99998 9.10476 5.99998 8.00016C5.99998 6.89556 6.89538 6.00016 7.99998 6.00016C9.10458 6.00016 9.99998 6.89556 9.99998 8.00016Z" stroke="currentColor"/>`,
   },
+  logout: {
+    viewBox: "0 0 16 16",
+    body: `<path d="M6 13H3V3H6M9.66667 10.6667L12.3333 8L9.66667 5.33333M12 8H5.33333" stroke="currentColor" stroke-linecap="square"/>`,
+  },
   "chevron-down": {
     viewBox: "0 0 16 16",
     body: `<path d="M5 6.5L8 9.5L11 6.5" stroke="currentColor"/>`,

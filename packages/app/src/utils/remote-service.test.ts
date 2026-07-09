@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test"
-import { normalizeRemoteServiceBaseUrl, remoteServiceBaseUrlFromSettings, remoteServiceUrl } from "./remote-service"
+import {
+  normalizeRemoteServiceBaseUrl,
+  remoteServiceBaseUrlFromSettings,
+  remoteServiceUrl,
+} from "./remote-service"
 
 describe("remote service url helpers", () => {
   test("normalizes empty and basic urls", () => {
@@ -14,8 +18,8 @@ describe("remote service url helpers", () => {
   })
 
   test("joins relative api paths against the configured root", () => {
-    expect(remoteServiceUrl("https://service.example.test/root", "/api/auth/login")).toBe(
-      "https://service.example.test/root/api/auth/login",
+    expect(remoteServiceUrl("https://service.example.test/root", "/ai-user/tpLogin")).toBe(
+      "https://service.example.test/root/ai-user/tpLogin",
     )
   })
 

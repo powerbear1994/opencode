@@ -153,10 +153,10 @@ function isPlaceholderDescription(value: string) {
 
 function isUsableSkillContent(value: string) {
   const trimmed = value.trim()
-  if (trimmed.length < 250) return false
+  if (trimmed.length < 80) return false
   if (!/^#\s+/m.test(trimmed)) return false
-  if ((trimmed.match(/^##\s+/gm) ?? []).length < 3) return false
   if (/^\s*(User|Assistant)\s*:/im.test(trimmed)) return false
+  if (/\b(TODO|TBD|lorem ipsum|fill this in)\b/i.test(trimmed)) return false
   return true
 }
 
@@ -181,14 +181,18 @@ function inferDescriptionFromContent(content: string) {
 
 function parseGeneratedSkill(text: string) {
   const json = extractJson(text)
-  if (isRecord(json) && typeof json.name === "string" && typeof json.description === "string" && typeof json.content === "string") {
+  if (isRecord(json) && typeof json.name === "string" && typeof json.content === "string") {
     const name = skillSegment(json.name)
     const content = json.content.trim()
-    const description = json.description.trim() || inferDescriptionFromContent(content)
+    const parsed = parseSkillDocument(content)
+    const description =
+      (typeof json.description === "string" ? json.description.trim() : undefined) ||
+      parsed?.description?.trim() ||
+      inferDescriptionFromContent(parsed?.content ?? content)
     if (
       name &&
       description &&
-      isUsableSkillContent(content) &&
+      isUsableSkillContent(parsed?.content ?? content) &&
       !isPlaceholderDescription(description)
     ) {
       return { name, description, content }
@@ -197,9 +201,9 @@ function parseGeneratedSkill(text: string) {
 
   const markdown = extractMarkdown(text)
   const parsed = parseSkillDocument(markdown)
-  if (parsed?.description && parsed.content.trim()) {
+  if (parsed?.content.trim()) {
     const name = skillSegment(parsed.name)
-    const description = parsed.description.trim() || inferDescriptionFromContent(parsed.content)
+    const description = parsed.description?.trim() || inferDescriptionFromContent(parsed.content)
     if (
       name &&
       description &&
@@ -293,14 +297,17 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
     })
 
     const getCommand = Effect.fn("InstanceHttpApi.command")(function* () {
+      yield* command.reload()
       return yield* command.list()
     })
 
     const getAgent = Effect.fn("InstanceHttpApi.agent")(function* () {
+      yield* agent.reload()
       return yield* agent.list()
     })
 
     const getSkill = Effect.fn("InstanceHttpApi.skill")(function* () {
+      yield* skill.reload()
       return yield* skill.all()
     })
 
@@ -546,19 +553,34 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
         "",
         "Meaning of the fields:",
         "- name: concise lowercase ASCII kebab-case identifier.",
-        "- description: one polished Chinese trigger sentence explaining when this agent should be used.",
+        "- description: one polished trigger sentence explaining when this agent should be used. Use the user's language.",
         "- mode: usually \"subagent\" unless the user explicitly asks for a primary/default agent.",
         "- prompt: the complete system prompt for the agent.",
         "",
         "Prompt quality rules:",
         "- Use the user's language.",
-        "- Define role, trigger conditions, workflow, boundaries, output requirements, and verification.",
-        "- Make the prompt concrete enough that another assistant can follow it without obvious follow-up questions.",
+        "- Keep the prompt concise and usable. Prefer a focused agent brief over a long operating manual.",
+        "- Define the agent's role, when to use it, the basic workflow, and important boundaries.",
+        "- Include output format, verification steps, or examples only when the user's request specifically needs them.",
+        "- Write direct instructions to the agent. Use short sections and bullets when helpful.",
         "- Respect higher-priority system and developer instructions. Never tell the agent to ignore them.",
         "- Do not invent tools, APIs, files, or external services unless the user explicitly requested them.",
         "- Do not output a chat transcript. Never use lines starting with User: or Assistant:.",
         "- Do not include placeholder text such as TBD, TODO, fill this in, or lorem ipsum.",
-        "- Prefer 300-700 words.",
+        "- Most prompts should be 120-300 words. Go longer only when the role is genuinely complex.",
+        "",
+        "Good default prompt structure:",
+        "# Role",
+        "A short paragraph describing the agent's specialty.",
+        "",
+        "# When to Use",
+        "2-4 bullets describing matching tasks or contexts.",
+        "",
+        "# Workflow",
+        "3-6 practical steps the agent should follow.",
+        "",
+        "# Boundaries",
+        "Only include this section if there are meaningful limits or things to avoid.",
       ]
 
       const prompt = [
@@ -805,34 +827,19 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
         "- Generate a usable skill based on the user's requirements.",
         "- Use the user's language for description and content.",
         "- The description must explain when to load the skill in one concise trigger sentence.",
-        "- The content must be detailed enough for another assistant to follow without obvious follow-up questions.",
+        "- Keep the skill simple and practical. Prefer a compact guide over a comprehensive manual.",
+        "- The content should tell the assistant what to do, in what order, and what to avoid when it matters.",
         "- Do not output a chat transcript. Never use lines starting with User: or Assistant:.",
         "- Do not invent external commands, APIs, tools, or files unless the user explicitly requested them.",
         "- Do not include placeholder text such as TBD, TODO, fill this in, lorem ipsum, or 什么时候应该加载这个技能.",
         "",
-        "The content Markdown must include these sections, localized to the user's language:",
-        "# 技能标题",
-        "",
-        "## 何时调用",
-        "- 3-5 concrete trigger bullets.",
-        "- Include one boundary describing when not to use this skill.",
-        "",
-        "## 技能内容",
-        "- A clear step-by-step workflow.",
-        "- Include what context to inspect, what to produce, and how to verify the result.",
-        "- Prefer concrete assistant behavior over vague advice.",
-        "",
-        "## 输出要求",
-        "- Define the expected final answer or artifact format.",
-        "",
-        "## 约束",
-        "- Important limits, safety checks, and things to avoid.",
-        "",
-        "## 示例",
-        "- 1-2 realistic trigger requests.",
-        "- Describe the expected assistant behavior. Do not write as a User/Assistant transcript.",
-        "",
-        "The content should usually be 350-800 words.",
+        "Content style:",
+        "- Start with a single H1 title.",
+        "- Add a short one-paragraph summary when helpful.",
+        "- Use 2-4 Markdown sections only when they clarify the workflow. Do not force sections like examples, constraints, or output format unless the user asked for them.",
+        "- A good default structure is: H1 title, a brief overview, then a short bullet list or numbered workflow.",
+        "- Keep most skills around 120-300 words. Go longer only when the requested workflow truly needs it.",
+        "- Put trigger guidance in the description field, not in a long 'when to use' body section.",
       ]
         .filter(Boolean)
 

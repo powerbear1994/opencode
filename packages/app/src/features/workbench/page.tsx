@@ -461,7 +461,7 @@ const WorkbenchContent: Component = () => {
               )}
             </Show>
           </div>
-          <ButtonV2 size="small" icon="plus" disabled={!projectDir()} onClick={openCreateDialog}>
+          <ButtonV2 size="small" disabled={!projectDir()} onClick={openCreateDialog}>
             新建工作项
           </ButtonV2>
         </div>
@@ -520,7 +520,7 @@ const WorkbenchContent: Component = () => {
                   {projectItems().length ? "换个关键词或状态再试试。" : "创建后会存储在当前项目的 docs/requirements 中。"}
                 </p>
                 <Show when={!projectItems().length}>
-                  <ButtonV2 size="small" variant="neutral" icon="plus" class="mt-4" onClick={openCreateDialog}>
+                  <ButtonV2 size="small" variant="neutral" class="mt-4" onClick={openCreateDialog}>
                     新建工作项
                   </ButtonV2>
                 </Show>
@@ -588,7 +588,6 @@ const WorkbenchContent: Component = () => {
                     <ButtonV2
                       size="small"
                       variant="neutral"
-                      icon="plus"
                       class="mt-4"
                       disabled={!projectDir()}
                       onClick={openCreateDialog}

@@ -16,8 +16,8 @@ import {
   type JSX,
 } from "solid-js"
 import { useParams, useSearchParams } from "@solidjs/router"
-import { useServerSDK } from "@/context/server-sdk"
 import { ServerConnection, useServer } from "@/context/server"
+import { useServerSync } from "@/context/server-sync"
 import { useModels } from "@/context/models"
 import { authTokenFromCredentials } from "@/utils/server"
 import { decode64 } from "@/utils/base64"
@@ -47,6 +47,12 @@ type DraftSkillFile = {
   path: string
   type: "file"
   content: string
+}
+
+type SkillListResult = {
+  directory: string
+  serverKey: string
+  skills: SkillInfo[]
 }
 
 type SkillCreateSource = "project" | "global"
@@ -100,8 +106,8 @@ export default function SkillsPage() {
 function SkillsContent() {
   const params = useParams<{ dir?: string }>()
   const [searchParams] = useSearchParams<{ project?: string }>()
-  const serverSDK = useServerSDK()
   const server = useServer()
+  const serverSync = useServerSync()
   const dialog = useDialog()
   const models = useModels()
   const [selected, setSelected] = createSignal<string>()
@@ -135,16 +141,23 @@ function SkillsContent() {
     if (params.dir) return decode64(params.dir) ?? ""
     return searchParams.project ?? ""
   })
+  const serverKey = createMemo(() => (server.current ? ServerConnection.key(server.current) : ""))
 
   const [data, { refetch }] = createResource(
-    () => ({ sdk: serverSDK().client, directory: directory() }),
-    async (input) => {
-      const response = await input.sdk.app.skills(input.directory ? { directory: input.directory } : undefined)
-      return response.data ?? []
+    () => {
+      const connection = server.current
+      if (!connection) return
+      return { connection, directory: directory(), serverKey: ServerConnection.key(connection) }
     },
+    loadSkills,
   )
 
-  const skills = createMemo(() => data() as SkillInfo[] | undefined)
+  const skills = createMemo(() => {
+    const result = data()
+    if (!result) return
+    if (result.directory !== directory() || result.serverKey !== serverKey()) return
+    return result.skills
+  })
   const filtered = createMemo(() =>
     filterSkills({ skills: skills() ?? [], query: query(), source: source(), directory: directory() }),
   )
@@ -349,6 +362,7 @@ function SkillsContent() {
       })
       setSelectedFile(file)
       setSelectedDirectory(parentSkillDirectory(file))
+      await serverSync().reloadSkills(directory() || undefined)
       await refetchSkillFile()
       setMode("edit")
       setMessage("已添加技能文件。")
@@ -408,6 +422,7 @@ function SkillsContent() {
   }
 
   const refresh = async (next?: string) => {
+    await serverSync().reloadSkills(directory() || undefined)
     await refetch()
     if (next) setSelected(next)
   }
@@ -493,37 +508,39 @@ function SkillsContent() {
   function SmartCreateDialog() {
     return (
       <Dialog title="智能生成技能" size="x-large">
-        <div class="flex flex-col gap-6 px-2 pb-2 pt-1">
-          <div class="rounded-[8px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-4 py-3">
-            <div class="flex items-start gap-3">
-              <span class="mt-0.5 inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-[var(--v2-blue-400)]/10 text-[var(--v2-blue-500)]">
-                <Icon name="brain" size="small" class="size-4" />
-              </span>
-              <div class="min-w-0">
-                <p class="text-[13px] font-[530] text-[var(--v2-text-text-base)]">AI 智能生成</p>
-                <p class="mt-0.5 text-[12px] leading-relaxed text-[var(--v2-text-text-muted)]">
-                  输入名称和技能需求，AI 会生成简介和正文，并填充到创建表单中
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div class="flex flex-col gap-4">
-            <Show when={smartGenerating()}>
-              <div class="flex flex-col items-center gap-3 rounded-[8px] border border-[var(--v2-blue-400)]/20 bg-[var(--v2-blue-400)]/4 px-4 py-6">
-                <span class="inline-flex gap-1">
-                  <span class="size-2 rounded-full bg-[var(--v2-blue-400)] animate-pulse" style="animation-delay:0ms" />
-                  <span class="size-2 rounded-full bg-[var(--v2-blue-400)] animate-pulse" style="animation-delay:200ms" />
-                  <span class="size-2 rounded-full bg-[var(--v2-blue-400)] animate-pulse" style="animation-delay:400ms" />
-                </span>
-                <div class="text-center">
-                  <p class="text-[13px] font-[530] text-[var(--v2-text-text-base)]">AI 正在生成 SKILL.md</p>
-                  <p class="mt-1 text-[12px] text-[var(--v2-text-text-muted)]">正在调用模型生成技能草稿，请稍候</p>
+        <div class="flex max-h-[min(680px,calc(100vh-120px))] flex-col px-2 pb-2 pt-1">
+          <div class="min-h-0 flex-1 overflow-y-auto pr-1">
+            <div class="flex flex-col gap-5">
+              <div class="rounded-[8px] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] px-4 py-3">
+                <div class="flex items-start gap-3">
+                  <span class="mt-0.5 inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-[var(--v2-blue-400)]/10 text-[var(--v2-blue-500)]">
+                    <Icon name="brain" size="small" class="size-4" />
+                  </span>
+                  <div class="min-w-0">
+                    <p class="text-[13px] font-[530] text-[var(--v2-text-text-base)]">AI 智能生成</p>
+                    <p class="mt-0.5 text-[12px] leading-relaxed text-[var(--v2-text-text-muted)]">
+                      输入名称和技能需求，AI 会生成简介和正文，并填充到创建表单中
+                    </p>
+                  </div>
                 </div>
               </div>
-            </Show>
 
-            <Show when={!smartGenerating()}>
+              <div class="flex flex-col gap-4">
+                <Show when={smartGenerating()}>
+                  <div class="flex flex-col items-center gap-3 rounded-[8px] border border-[var(--v2-blue-400)]/20 bg-[var(--v2-blue-400)]/4 px-4 py-6">
+                    <span class="inline-flex gap-1">
+                      <span class="size-2 rounded-full bg-[var(--v2-blue-400)] animate-pulse" style="animation-delay:0ms" />
+                      <span class="size-2 rounded-full bg-[var(--v2-blue-400)] animate-pulse" style="animation-delay:200ms" />
+                      <span class="size-2 rounded-full bg-[var(--v2-blue-400)] animate-pulse" style="animation-delay:400ms" />
+                    </span>
+                    <div class="text-center">
+                      <p class="text-[13px] font-[530] text-[var(--v2-text-text-base)]">AI 正在生成 SKILL.md</p>
+                      <p class="mt-1 text-[12px] text-[var(--v2-text-text-muted)]">正在调用模型生成技能草稿，请稍候</p>
+                    </div>
+                  </div>
+                </Show>
+
+                <Show when={!smartGenerating()}>
             <label class="flex flex-col gap-1.5">
               <span class="text-[12px] font-[530] text-[var(--v2-text-text-base)]">
                 名称
@@ -579,17 +596,19 @@ function SkillsContent() {
                 style={{ width: "100%" }}
               />
             </label>
-            </Show>
+                </Show>
+              </div>
+
+              <Show when={smartError()}>
+                <div class="flex items-start gap-2 rounded-[6px] border border-[var(--v2-red-400)]/30 bg-[var(--v2-red-400)]/8 px-3 py-2.5">
+                  <span class="mt-px inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-[var(--v2-red-400)]/20 text-[var(--v2-red-500)] text-[10px] font-[700]">!</span>
+                  <p class="line-clamp-4 text-[12px] leading-relaxed text-[var(--v2-text-text-base)]" title={smartError()}>{smartError()}</p>
+                </div>
+              </Show>
+            </div>
           </div>
 
-          <Show when={smartError()}>
-            <div class="flex items-start gap-2 rounded-[6px] border border-[var(--v2-red-400)]/30 bg-[var(--v2-red-400)]/8 px-3 py-2.5">
-              <span class="mt-px inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-[var(--v2-red-400)]/20 text-[var(--v2-red-500)] text-[10px] font-[700]">!</span>
-              <p class="text-[12px] leading-relaxed text-[var(--v2-text-text-base)]">{smartError()}</p>
-            </div>
-          </Show>
-
-          <div class="flex items-center justify-end gap-2.5 border-t border-[var(--v2-border-border-base)] pt-5">
+          <div class="mt-5 flex shrink-0 items-center justify-end gap-2.5 border-t border-[var(--v2-border-border-base)] pt-4">
             <button
               type="button"
               onClick={() => dialog.close()}
@@ -747,7 +766,7 @@ function SkillsContent() {
                   <For each={[1, 2, 3, 4]}>{() => <div class="h-[74px] animate-pulse rounded-[8px] bg-[var(--v2-background-bg-layer-01)]" />}</For>
                 </div>
               </Match>
-              <Match when={data.error}>
+              <Match when={!data.loading && data.error}>
                 <div class="flex flex-col items-center gap-3 py-8">
                   <p class="text-[13px] text-[var(--v2-text-text-muted)]">无法读取技能列表。</p>
                   <button type="button" onClick={() => void refetch()} class={secondaryButton()}>
@@ -1534,6 +1553,27 @@ function modelSelection(value: string) {
   const modelID = modelParts.join("/")
   if (!providerID || !modelID) return undefined
   return { providerID, modelID }
+}
+
+async function loadSkills(input: { connection: ServerConnection.Any; directory: string; serverKey: string }): Promise<SkillListResult> {
+  try {
+    return {
+      directory: input.directory,
+      serverKey: input.serverKey,
+      skills: await requestSkill<SkillInfo[]>(input.connection, { path: "/skill", directory: input.directory }),
+    }
+  } catch {
+    await wait(150)
+    return {
+      directory: input.directory,
+      serverKey: input.serverKey,
+      skills: await requestSkill<SkillInfo[]>(input.connection, { path: "/skill", directory: input.directory }),
+    }
+  }
+}
+
+function wait(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms))
 }
 
 function requestSkill<T>(

@@ -33,9 +33,7 @@ import { useTheme } from "@opencode-ai/ui/theme/context"
 import {
   AuthProvider,
   useAuth,
-  authTokenRef,
-  isMockAuthToken,
-  setAuthServerUrl,
+  setAuthServerConnection,
   setRemoteServiceBaseUrl,
 } from "./context/auth"
 import { LoginPage } from "./pages/login"
@@ -274,9 +272,6 @@ const createPlatform = (windowState: DesktopWindowState): Platform => {
     fetch: (input, init) => {
       const headers = new Headers(input instanceof Request ? input.headers : undefined)
       new Headers(init?.headers).forEach((value, key) => headers.set(key, value))
-      if (authTokenRef.current && !isMockAuthToken(authTokenRef.current) && !headers.has("Authorization")) {
-        headers.set("Authorization", `Bearer ${authTokenRef.current}`)
-      }
       if (input instanceof Request) return fetch(new Request(input, { ...init, headers }))
       return fetch(input, { ...init, headers })
     },
@@ -364,8 +359,6 @@ function DesktopRoot(props: { windowState: DesktopWindowState }) {
   const router = (props: BaseRouterProps) => (
     <DesktopMemoryRouter {...props} windowID={platform.windowID ?? "browser"} />
   )
-  const onboarding = Promise.withResolvers<void>()
-
   function handleClick(e: MouseEvent) {
     const link = (e.target as HTMLElement).closest("a.external-link") as HTMLAnchorElement | null
     if (link?.href) {
@@ -417,7 +410,7 @@ function DesktopRoot(props: { windowState: DesktopWindowState }) {
     // Propagate sidecar URL to auth context
     createEffect(() => {
       const data = initializationData(sidecar)
-      if (data) setAuthServerUrl(data.url)
+      if (data) setAuthServerConnection(data)
     })
 
     const ready = createMemo(
@@ -453,11 +446,10 @@ function DesktopRoot(props: { windowState: DesktopWindowState }) {
                 defaultServer={key}
                 servers={servers()}
                 router={router}
-                startup={onboarding.promise}
                 serverScoped={
                   <DesktopFirstLaunchOnboarding
                     initialUrl={getLastActiveUrl(platform.windowID ?? "browser")}
-                    onLoaded={onboarding.resolve}
+                    onLoaded={() => {}}
                   />
                 }
               >

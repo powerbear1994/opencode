@@ -84,6 +84,13 @@ export const Info = Schema.Struct({
   username: Schema.optional(Schema.String).annotate({
     description: "Custom username to display in conversations instead of system username",
   }),
+  auth: Schema.optional(
+    Schema.Struct({
+      allowMockLogin: Schema.optional(Schema.Boolean).annotate({
+        description: "Allow the desktop login screen to accept the built-in admin/opencode mock credentials.",
+      }),
+    }),
+  ).annotate({ description: "Desktop authentication options." }),
   mode: Schema.optional(
     Schema.StructWithRest(
       Schema.Struct({ build: Schema.optional(ConfigAgentV1.Info), plan: Schema.optional(ConfigAgentV1.Info) }),

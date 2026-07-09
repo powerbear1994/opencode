@@ -31,6 +31,7 @@ export { handleNotificationClick } from "./utils/notification-click"
 export {
   REMOTE_SERVICE_SETTINGS_KEY,
   REMOTE_SERVICE_SETTINGS_STORAGE,
+  normalizeRemoteServiceBaseUrl,
   remoteServiceBaseUrlFromSettings,
   remoteServiceUrl,
 } from "./utils/remote-service"

@@ -117,6 +117,11 @@ describe("layout workspace helpers", () => {
     expect(String(pathKey("C:\\tmp\\demo\\\\"))).toBe("C:/tmp/demo")
   })
 
+  test("uses an empty key for missing workspace paths", () => {
+    expect(String(pathKey(undefined))).toBe("")
+    expect(String(pathKey(null))).toBe("")
+  })
+
   test("preserves posix and drive roots in workspace key", () => {
     expect(String(pathKey("/"))).toBe("/")
     expect(String(pathKey("///"))).toBe("/")

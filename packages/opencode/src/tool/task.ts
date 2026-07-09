@@ -113,6 +113,7 @@ export const TaskTool = Tool.define(
         })
       }
 
+      yield* agent.reload()
       const next = yield* agent.get(params.subagent_type)
       if (!next) {
         return yield* Effect.fail(new Error(`Unknown agent type: ${params.subagent_type} is not a valid agent type`))

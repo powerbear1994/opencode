@@ -96,7 +96,7 @@ export const SidebarContent = (props: {
         <div class="shrink-0 w-full pt-3 pb-6 flex flex-col items-center gap-2">
           <Tooltip placement={placement()} value={props.workbenchLabel()}>
             <IconButton
-              icon="checklist"
+              icon="review"
               variant="ghost"
               size="large"
               onClick={props.onOpenWorkbench}

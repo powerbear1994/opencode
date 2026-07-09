@@ -159,6 +159,7 @@ const layer = Layer.effect(
       const parts: Types.DeepMutable<PromptInput["parts"]> = [{ type: "text", text: template }]
       const files = ConfigMarkdown.files(template)
       const seen = new Set<string>()
+      if (files.length > 0) yield* agents.reload()
       yield* Effect.forEach(
         files,
         Effect.fnUntraced(function* (match) {
@@ -310,6 +311,7 @@ const layer = Layer.effect(
         { args: taskArgs },
       )
 
+      yield* agents.reload()
       const taskAgent = yield* agents.get(task.agent)
       if (!taskAgent) {
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
@@ -458,6 +460,7 @@ const layer = Layer.effect(
             if (session.revert) {
               yield* revert.cleanup(session)
             }
+            yield* agents.reload()
             const agent = yield* agents.get(input.agent)
             if (!agent) {
               const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
@@ -634,6 +637,7 @@ const layer = Layer.effect(
 
     const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (input: PromptInput) {
       const agentName = input.agent
+      yield* agents.reload()
       const ag = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
       if (!ag) {
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
@@ -1167,6 +1171,7 @@ const layer = Layer.effect(
             continue
           }
 
+          yield* agents.reload()
           const agent = yield* agents.get(lastUser.agent)
           if (!agent) {
             const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
@@ -1411,6 +1416,7 @@ const layer = Layer.effect(
       const taskModel = yield* Effect.gen(function* () {
         if (cmd.model) return Provider.parseModel(cmd.model)
         if (cmd.agent) {
+          yield* agents.reload()
           const cmdAgent = yield* agents.get(cmd.agent)
           if (cmdAgent?.model) return cmdAgent.model
         }
@@ -1420,6 +1426,7 @@ const layer = Layer.effect(
 
       yield* getModel(taskModel.providerID, taskModel.modelID, input.sessionID)
 
+      yield* agents.reload()
       const agent = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
       if (!agent) {
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
